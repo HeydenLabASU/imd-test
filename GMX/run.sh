@@ -1,7 +1,7 @@
 #!/bin/bash
 
-rm run-NPT.cpt run-NPT.gro run-NPT.trr run-NPT.edr run-NPT.log run-NPT.tpr run-NPT.xvg imd.gro mdout.mdp
+rm run.cpt run.gro run.trr run.edr run.log run.tpr run.xvg imd.gro mdout.mdp
 
-gmx grompp -f run-NPT.mdp -c equi-NPT+posres.gro -p topol.top -imd imd.gro -o run-NPT.tpr
+gmx grompp -f run.mdp -c strcut.gro -p topol.top -imd imd.gro -o run.tpr
 
-gmx mdrun -nt 1 -deffnm run-NPT -imdport 8888 -imdwait
+gmx mdrun -nt 1 -deffnm run -imdport 8888 -imdwait
