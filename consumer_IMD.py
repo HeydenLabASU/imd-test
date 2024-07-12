@@ -7,7 +7,7 @@ import numpy as np
 import time
 import MDAnalysis as mda
 
-u=mda.Universe("GMX/start.tpr","GMX/struct.gro")
+u=mda.Universe("GMX/run.tpr","GMX/struct.gro")
 stride=10
 
 #Define constants
