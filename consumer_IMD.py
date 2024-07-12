@@ -7,7 +7,7 @@ import numpy as np
 import time
 import MDAnalysis as mda
 
-u=mda.Universe("GMX/run-NPT.tpr","GMX/equi-NPT+posres.gro")
+u=mda.Universe("GMX/start.tpr","GMX/struct.gro")
 stride=10
 
 #Define constants
@@ -195,7 +195,7 @@ def handle_client_connection(sock,stride):
     if(stride!=0):
         imd_send_trate(sock,stride)
 
-    with mda.Writer("tmp.trr", len(u.atoms)) as w:    
+    with mda.Writer("imd-test.trr", len(u.atoms)) as w:    
         while True:
             #Receive header
             header_data = imd_readn(sock, HEADERSIZE)
