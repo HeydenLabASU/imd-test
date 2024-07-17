@@ -9,6 +9,8 @@ import MDAnalysis as mda
 
 u=mda.Universe("GMX/run.tpr","GMX/struct.gro")
 stride=10
+#switch_version = 0 #use default IMD version
+switch_version = 1 #switch to IMD_V3
 
 #Define constants
 HEADERSIZE = 8
@@ -27,6 +29,7 @@ class IMDType(Enum):
     IMD_PAUSE= 7
     IMD_TRATE = 8
     IMD_IOERROR = 9
+    IMD_V3 = 10
 
 class IMDheader:
     def __init__(self, header_type, length):
@@ -100,8 +103,10 @@ class IMDfcoords:
         #for a in u.atoms:
         #    a.position = struct.unpack("<fff",data)
         format="<"+n*"fff"
-        fcoords = np.asarray(struct.unpack(format,data), dtype=float)
-        u.atoms.positions = fcoords.reshape(n,3)
+        #fcoords = np.asarray(struct.unpack(format,data), dtype=float)
+        #u.atoms.positions = fcoords.reshape(n,3)
+        u.trajectory.ts._pos[:] = np.reshape(struct.unpack(format,data),(n,3)) #line profiler
+        fcoords = u.trajectory.ts._pos
         return IMDfcoords(fcoords, n)
 
     def unpack_be(u,data,n):
@@ -111,8 +116,10 @@ class IMDfcoords:
         #for a in u.atoms:
         #    a.position = struct.unpack(">fff",data)
         format=">"+n*"fff"
-        fcoords = np.asarray(struct.unpack(format,data), dtype=float)
-        u.atoms.positions = fcoords.reshape(n,3)
+        #fcoords = np.asarray(struct.unpack(format,data), dtype=float)
+        #u.atoms.positions = fcoords.reshape(n,3)
+        u.trajectory.ts._pos[:] = np.reshape(struct.unpack(format,data),(n,3))
+        fcoords = u.trajectory.ts._pos
         return IMDfcoords(fcoords, n)
 
 def imd_readn(sock, n):
@@ -148,8 +155,11 @@ def imd_writen(sock, data):
 def imd_send_pause(sock):
     """Send a pause message."""
     header = IMDheader(IMDType.IMD_PAUSE.value, 0)
-    fill_header(header, IMDType.IMD_PAUSE.value, 0)
-    return imd_writen(sock, header.pack()) == HEADERSIZE
+    packed_header = header.pack()
+    sock.sendall(packed_header)
+    print("IMD_PAUSE signal sent")
+    #fill_header(header, IMDType.IMD_PAUSE.value, 0)
+    #return imd_writen(sock, header.pack()) == HEADERSIZE
 
 def imd_send_go(sock):
     header = IMDheader(IMDType.IMD_GO.value, 0)
@@ -162,6 +172,12 @@ def imd_send_trate(sock,stride):
     packed_header = header.pack()
     sock.sendall(packed_header)
     print(f'IMD_TRATE = {stride} sent')
+    
+def imd_switch_version(sock,switch_version):
+    header = IMDheader(IMDType.IMD_V3.value, switch_version)
+    packed_header = header.pack()
+    sock.sendall(packed_header)
+    print(f'IMD_V3 = Signal {switch_version} sent')
 
 def handle_client_connection(sock,stride):
     print("Client connected")
@@ -188,12 +204,18 @@ def handle_client_connection(sock,stride):
                 print(f'big endian detected')
             else:
                 print(f'ERROR: could not detect endianess')
+        
         if(endian!=-1):
             print("sending IMD_GO signal")
             imd_send_go(sock)
-
+    
+    #if switch_version == 0:
+    if switch_version == 1:
+        imd_switch_version(sock, switch_version)
+    
     if(stride!=0):
         imd_send_trate(sock,stride)
+    
 
     with mda.Writer("imd-test.trr", len(u.atoms)) as w:    
         while True:
