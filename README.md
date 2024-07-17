@@ -15,6 +15,10 @@ Note: the time and index of the trajectory frames are all 0 at the moment
 - GROMACS 2018 or later
 - MDAnalysis
 
+## Compiling edited imd.cpp
+- copy imd.cpp to gromacs-XXXX.X/src/gromacs/imd
+- compile GROMACS again with the edited imd.cpp to apply changes to the source code
+
 ## Testing
 - download repository
 - open two terminals
