@@ -9,8 +9,12 @@ import MDAnalysis as mda
 
 u=mda.Universe("GMX/run.tpr","GMX/struct.gro")
 stride=10
+
+#All constants that are not originally defined in GROMACS source code
 #switch_version = 0 #use default IMD version
 switch_version = 1 #switch to IMD_V3
+TRICLINIC_DIMENSIONS = 6
+ORTHORHOMBIC_DIMENSIONS = 3
 
 #Define constants
 HEADERSIZE = 8
@@ -30,6 +34,7 @@ class IMDType(Enum):
     IMD_TRATE = 8
     IMD_IOERROR = 9
     IMD_V3 = 10
+    IMD_BOX = 11
 
 class IMDheader:
     def __init__(self, header_type, length):
@@ -121,6 +126,50 @@ class IMDfcoords:
         u.trajectory.ts._pos[:] = np.reshape(struct.unpack(format,data),(n,3))
         fcoords = u.trajectory.ts._pos
         return IMDfcoords(fcoords, n)
+
+# =============================================================================
+# class IMDBox:
+#     def __init__(self, box_dimensions):
+#         self.box_dimensions = box_dimensions
+# 
+#     def unpack_le(data, num_dimensions):
+#         '''read box dimensions in little endian format from bytearray'''
+#         box_dimensions = struct.unpack(f'<{num_dimensions}f', data)
+#         return IMDBox(box_dimensions)
+# 
+#     def unpack_be(data, num_dimensions):
+#         '''read box dimensions in big endian format from bytearray'''
+#         box_dimensions = struct.unpack(f'>{num_dimensions}f', data)
+#         return IMDBox(box_dimensions)
+# =============================================================================
+
+class IMDBox:
+    def __init__(self, box_dimensions):
+        self.box_dimensions = box_dimensions
+
+    def unpack_le(data, length):
+        if length == 6:
+            format = '<ffffff'
+        elif length == 3:
+            format = '<fff'
+        else:
+            raise ValueError(f"Unexpected length for box dimensions: {length}")
+        
+        unpacked_data = struct.unpack(format, data)
+        return IMDBox(unpacked_data)
+
+    def unpack_be(data, length):
+        if length == 6:
+            format = '>ffffff'
+        elif length == 3:
+            # Orthorhombic box
+            format = '>fff'
+        else:
+            raise ValueError(f"Unexpected length for box dimensions: {length}")
+        
+        unpacked_data = struct.unpack(format, data)
+        return IMDBox(unpacked_data)
+
 
 def imd_readn(sock, n):
     """Read n bytes from a socket."""
@@ -215,7 +264,6 @@ def handle_client_connection(sock,stride):
     
     if(stride!=0):
         imd_send_trate(sock,stride)
-    
 
     with mda.Writer("imd-test.trr", len(u.atoms)) as w:    
         while True:
@@ -245,6 +293,21 @@ def handle_client_connection(sock,stride):
                 #for x in fcoords.fcoords:
                 #    print(f'X {x[0]} {x[1]} {x[2]}')
                 w.write(u)
+            elif header.type == IMDType.IMD_BOX.value:
+                print(f'{header.length}')
+                box_dimensions_data = imd_readn(sock, header.length * 4)
+                if header.length == TRICLINIC_DIMENSIONS:
+                    print('triclinic box')
+                elif header.length == ORTHORHOMBIC_DIMENSIONS:
+                    print('orthorhombic box')
+                else:
+                    print('Unknown box type')
+
+                if endian == 0:
+                    box_dimensions = IMDBox.unpack_le(box_dimensions_data, header.length)
+                else:
+                    box_dimensions = IMDBox.unpack_be(box_dimensions_data, header.length)        
+                print(f'{box_dimensions.box_dimensions}')
             else:
                 print("IMD message with unknown header.type received")
                 print(f'message type = {header.type}')
