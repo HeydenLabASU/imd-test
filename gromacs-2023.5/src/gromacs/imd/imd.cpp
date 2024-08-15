@@ -249,6 +249,9 @@ public:
     int version_switch_off = 0;
     //! New version switch is on
     int version_switch_on = 1;
+    
+    //! Matrix to send box dimension.
+    matrix box;
 
     //! Port to use for network socket.
     int port = 0;
@@ -292,6 +295,8 @@ public:
     char* energysendbuf = nullptr;
     //! Buffer to make molecules whole before sending.
     rvec* sendxbuf = nullptr;
+    //! Send buffer for box dimensions.
+    char* boxsendbuf = nullptr;
 
     //! Molecules block in IMD group.
     t_block mols;
@@ -356,6 +361,7 @@ enum class IMDMessageType : int
     TRate,      /**< sets the IMD transmission and processing rate   */
     IOerror,    /**< I/O error                                       */
     V3,         /**< switch to new version of IMD protocol           */
+    Box,        /**< box size                                        */
     Count       /**< number of entries                               */
 };
 
@@ -366,7 +372,8 @@ static const char* enumValueToString(IMDMessageType enumValue)
 {
     constexpr gmx::EnumerationArray<IMDMessageType, const char*> imdMessageTypeNames = {
         "IMD_DISCONNECT", "IMD_ENERGIES", "IMD_FCOORDS", "IMD_GO",    "IMD_HANDSHAKE",
-        "IMD_KILL",       "IMD_MDCOMM",   "IMD_PAUSE",   "IMD_TRATE", "IMD_IOERROR", "IMD_V3"
+        "IMD_KILL",       "IMD_MDCOMM",   "IMD_PAUSE",   "IMD_TRATE", "IMD_IOERROR",
+	"IMD_V3",         "IMD_BOX"
     };
     return imdMessageTypeNames[enumValue];
 }
@@ -457,12 +464,14 @@ static int32_t imd_write_multiple(IMDSocket* socket, const char* datptr, int32_t
 
 
 /*! \brief Handshake with IMD client. */
-static int imd_handshake(IMDSocket* socket)
+static int imd_handshake(IMDSocket* socket, int switchStatus)
 {
     IMDHeader header;
 
 
-    fill_header(&header, IMDMessageType::Handshake, 1);
+    /*fill_header(&header, IMDMessageType::Handshake, 1);*/
+    fill_header(&header, IMDMessageType::Handshake, switchStatus);
+    
     header.length = c_protocolVersion; /* client wants unswapped version */
 
     return static_cast<int>(imd_write_multiple(socket, reinterpret_cast<char*>(&header), c_headerSize)
@@ -588,6 +597,54 @@ static int imd_send_rvecs(IMDSocket* socket, int nat, rvec* x, char* buffer)
     return static_cast<int>(imd_write_multiple(socket, buffer, size) != size);
 }
 
+static int imd_send_box(IMDSocket* socket, const matrix box, char* buffer)
+{
+    int32_t size;
+    int     tuplesize;
+    float   sendBox[6];  /* 6 elements for triclinic, 3 for orthorhombic */
+    int     header_length;
+
+    if (TRICLINIC(box))
+    {
+        /* Prepare the buffer for triclinic box (6 elements) */
+        tuplesize = 6 * sizeof(float);
+        sendBox[0] = static_cast<float>(box[XX][XX]) * gmx::c_nm2A;
+        sendBox[1] = static_cast<float>(box[YY][XX]) * gmx::c_nm2A;
+        sendBox[2] = static_cast<float>(box[YY][YY]) * gmx::c_nm2A;
+        sendBox[3] = static_cast<float>(box[ZZ][XX]) * gmx::c_nm2A;
+        sendBox[4] = static_cast<float>(box[ZZ][YY]) * gmx::c_nm2A;
+        sendBox[5] = static_cast<float>(box[ZZ][ZZ]) * gmx::c_nm2A;
+        header_length = 6;
+    }
+    else
+    {
+        /* Prepare the buffer for orthorhombic box (3 elements) */
+        tuplesize = 3 * sizeof(float);
+        sendBox[0] = static_cast<float>(box[XX][XX]) * gmx::c_nm2A;
+        sendBox[1] = static_cast<float>(box[YY][YY]) * gmx::c_nm2A;
+        sendBox[2] = static_cast<float>(box[ZZ][ZZ]) * gmx::c_nm2A;
+        header_length = 3;
+    }
+
+    /* Print the box dimensions */
+    printf("Sending box dimensions: ");
+    for (int i = 0; i < header_length; ++i) {
+        printf("%f ", sendBox[i]);
+    }
+    printf("\n");
+
+    /* Required size for the send buffer */
+    size = c_headerSize + tuplesize;
+
+    /* Prepare header with the correct length for triclinic or orthorhombic */
+    fill_header(reinterpret_cast<IMDHeader*>(buffer), IMDMessageType::Box, header_length);
+
+    /* Copy the box dimensions to send buffer */
+    memcpy(buffer + c_headerSize, sendBox, tuplesize);
+
+    /* Send the buffer over the socket */
+    return static_cast<int>(imd_write_multiple(socket, buffer, size) != size);
+}
 
 void ImdSession::Impl::prepareMainSocket()
 {
@@ -666,7 +723,7 @@ bool ImdSession::Impl::tryConnect()
         }
 
         /* handshake with client */
-        if (imd_handshake(clientsocket))
+        if (imd_handshake(clientsocket, switchStatus)) /* added a new parameter to tell consumer to switch version or not */
         {
             issueFatalError("Connection failed.");
             return false;
@@ -1512,6 +1569,10 @@ std::unique_ptr<ImdSession> makeImdSession(const t_inputrec*              ir,
         snew(impl->energies, 1);
         int32_t bufxsize = c_headerSize + 3 * sizeof(float) * impl->nat;
         snew(impl->coordsendbuf, bufxsize);
+
+	/* Initialize the buffer for box dimensions */
+        int32_t boxbufsize = c_headerSize + 9 * sizeof(float);
+        snew(impl->boxsendbuf, boxbufsize);
     }
 
     /* do we allow interactive pulling? If so let the other nodes know. */
@@ -1664,6 +1725,11 @@ void ImdSession::sendPositionsAndEnergies()
     if (imd_send_rvecs(impl_->clientsocket, impl_->nat, impl_->xa, impl_->coordsendbuf))
     {
         impl_->issueFatalError("Error sending updated positions. Disconnecting client.");
+    }
+
+    if (imd_send_box(impl_->clientsocket, impl_->box, impl_->boxsendbuf))
+    {
+        impl_->issueFatalError("Error sending box dimensions. Disconnecting client.");
     }
 }
 
