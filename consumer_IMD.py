@@ -11,8 +11,7 @@ u=mda.Universe("GMX/run.tpr","GMX/struct.gro")
 stride=10
 
 #All constants that are not originally defined in GROMACS source code
-#switch_version = 0 #use default IMD version
-switch_version = 1 #switch to IMD_V3
+IMDV3 = 3
 TRICLINIC_DIMENSIONS = 6
 ORTHORHOMBIC_DIMENSIONS = 3
 
@@ -33,8 +32,12 @@ class IMDType(Enum):
     IMD_PAUSE= 7
     IMD_TRATE = 8
     IMD_IOERROR = 9
-    IMD_V3 = 10
-    IMD_BOX = 11
+    IMD_SESSIONINFO = 10
+    IMD_RESUME = 11
+    IMD_TIME = 12
+    IMD_BOX = 13
+    IMD_VELOCITIES = 14
+    IMD_FORCES = 15
 
 class IMDheader:
     def __init__(self, header_type, length):
@@ -127,49 +130,19 @@ class IMDfcoords:
         fcoords = u.trajectory.ts._pos
         return IMDfcoords(fcoords, n)
 
-# =============================================================================
-# class IMDBox:
-#     def __init__(self, box_dimensions):
-#         self.box_dimensions = box_dimensions
-# 
-#     def unpack_le(data, num_dimensions):
-#         '''read box dimensions in little endian format from bytearray'''
-#         box_dimensions = struct.unpack(f'<{num_dimensions}f', data)
-#         return IMDBox(box_dimensions)
-# 
-#     def unpack_be(data, num_dimensions):
-#         '''read box dimensions in big endian format from bytearray'''
-#         box_dimensions = struct.unpack(f'>{num_dimensions}f', data)
-#         return IMDBox(box_dimensions)
-# =============================================================================
-
 class IMDBox:
     def __init__(self, box_dimensions):
         self.box_dimensions = box_dimensions
 
-    def unpack_le(data, length):
-        if length == 6:
-            format = '<ffffff'
-        elif length == 3:
-            format = '<fff'
-        else:
-            raise ValueError(f"Unexpected length for box dimensions: {length}")
-        
-        unpacked_data = struct.unpack(format, data)
-        return IMDBox(unpacked_data)
+    def unpack_le(data, num_elements):
+        '''read box dimensions in little endian format from bytearray'''
+        box_dimensions = struct.unpack(f'<{num_elements}f', data)
+        return IMDBox(box_dimensions)
 
-    def unpack_be(data, length):
-        if length == 6:
-            format = '>ffffff'
-        elif length == 3:
-            # Orthorhombic box
-            format = '>fff'
-        else:
-            raise ValueError(f"Unexpected length for box dimensions: {length}")
-        
-        unpacked_data = struct.unpack(format, data)
-        return IMDBox(unpacked_data)
-
+    def unpack_be(data, num_elements):
+        '''read box dimensions in big endian format from bytearray'''
+        box_dimensions = struct.unpack(f'>{num_elements}f', data)
+        return IMDBox(box_dimensions)
 
 def imd_readn(sock, n):
     """Read n bytes from a socket."""
@@ -221,12 +194,6 @@ def imd_send_trate(sock,stride):
     packed_header = header.pack()
     sock.sendall(packed_header)
     print(f'IMD_TRATE = {stride} sent')
-    
-def imd_switch_version(sock,switch_version):
-    header = IMDheader(IMDType.IMD_V3.value, switch_version)
-    packed_header = header.pack()
-    sock.sendall(packed_header)
-    print(f'IMD_V3 = Signal {switch_version} sent')
 
 def handle_client_connection(sock,stride):
     print("Client connected")
@@ -243,12 +210,12 @@ def handle_client_connection(sock,stride):
     if header.type == IMDType.IMD_HANDSHAKE.value:
         print(f'Received handshake')
         header = IMDheader.unpack_le(header_data,header)
-        if(header.length == IMDVERSION):
+        if(header.length == IMDV3):
             endian=0
             print(f'little endian detected')
         else:
             header = IMDheader.unpack_be(header_data,header)
-            if(header.length == IMDVERSION):
+            if(header.length == IMDV3):
                 endian=1
                 print(f'big endian detected')
             else:
@@ -257,10 +224,6 @@ def handle_client_connection(sock,stride):
         if(endian!=-1):
             print("sending IMD_GO signal")
             imd_send_go(sock)
-    
-    #if switch_version == 0:
-    if switch_version == 1:
-        imd_switch_version(sock, switch_version)
     
     if(stride!=0):
         imd_send_trate(sock,stride)
@@ -300,8 +263,6 @@ def handle_client_connection(sock,stride):
                     print('triclinic box')
                 elif header.length == ORTHORHOMBIC_DIMENSIONS:
                     print('orthorhombic box')
-                else:
-                    print('Unknown box type')
 
                 if endian == 0:
                     box_dimensions = IMDBox.unpack_le(box_dimensions_data, header.length)

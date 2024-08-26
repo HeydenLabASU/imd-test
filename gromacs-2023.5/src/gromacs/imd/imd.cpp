@@ -101,6 +101,9 @@ constexpr int c_headerSize = 8;
 /*! \brief IMD Protocol Version. */
 constexpr int c_protocolVersion = 2;
 
+/*! \IMD V3. */
+constexpr int IMDV3 = 3;
+
 enum class IMDMessageType : int;
 
 /*! \internal
@@ -243,15 +246,8 @@ public:
     //! Default IMD frequency when disconnected.
     int defaultNstImd = -1;
 
-    //! IMD version switch status
-    int switchStatus;
-    //! New version switch is off
-    int version_switch_off = 0;
-    //! New version switch is on
-    int version_switch_on = 1;
-    
-    //! Matrix to send box dimension.
-    matrix box;
+    //! Initialize matrix to send box dimension.
+    matrix localBox;
 
     //! Port to use for network socket.
     int port = 0;
@@ -360,8 +356,12 @@ enum class IMDMessageType : int
     Pause,      /**< pauses the simulation                           */
     TRate,      /**< sets the IMD transmission and processing rate   */
     IOerror,    /**< I/O error                                       */
-    V3,         /**< switch to new version of IMD protocol           */
+    SessionInfo,
+    Resume,
+    Time,
     Box,        /**< box size                                        */
+    Velocities,
+    Forces,
     Count       /**< number of entries                               */
 };
 
@@ -373,7 +373,8 @@ static const char* enumValueToString(IMDMessageType enumValue)
     constexpr gmx::EnumerationArray<IMDMessageType, const char*> imdMessageTypeNames = {
         "IMD_DISCONNECT", "IMD_ENERGIES", "IMD_FCOORDS", "IMD_GO",    "IMD_HANDSHAKE",
         "IMD_KILL",       "IMD_MDCOMM",   "IMD_PAUSE",   "IMD_TRATE", "IMD_IOERROR",
-	"IMD_V3",         "IMD_BOX"
+	    "IMD_SESSIONINFO","IMD_RESUME",   "IMD_TIME",    "IMD_BOX",   "IMD_VELOCITIES", 
+        "IMD_FORCES"
     };
     return imdMessageTypeNames[enumValue];
 }
@@ -464,15 +465,16 @@ static int32_t imd_write_multiple(IMDSocket* socket, const char* datptr, int32_t
 
 
 /*! \brief Handshake with IMD client. */
-static int imd_handshake(IMDSocket* socket, int switchStatus)
+static int imd_handshake(IMDSocket* socket)
 {
     IMDHeader header;
 
 
-    /*fill_header(&header, IMDMessageType::Handshake, 1);*/
-    fill_header(&header, IMDMessageType::Handshake, switchStatus);
+    fill_header(&header, IMDMessageType::Handshake, 1);
+    /*fill_header(&header, IMDMessageType::Handshake, switchStatus);*/
     
-    header.length = c_protocolVersion; /* client wants unswapped version */
+   /* header.length = c_protocolVersion; /* client wants unswapped version */
+    header.length = IMDV3;  /* use IMD V3 */
 
     return static_cast<int>(imd_write_multiple(socket, reinterpret_cast<char*>(&header), c_headerSize)
                             != c_headerSize);
@@ -601,34 +603,34 @@ static int imd_send_box(IMDSocket* socket, const matrix box, char* buffer)
 {
     int32_t size;
     int     tuplesize;
-    float   sendBox[6];  /* 6 elements for triclinic, 3 for orthorhombic */
+    float   sendBox[9];  /* 6 elements for triclinic, 3 for orthorhombic */
     int     header_length;
 
     if (TRICLINIC(box))
     {
         /* Prepare the buffer for triclinic box (6 elements) */
         tuplesize = 6 * sizeof(float);
-        sendBox[0] = static_cast<float>(box[XX][XX]) * gmx::c_nm2A;
-        sendBox[1] = static_cast<float>(box[YY][XX]) * gmx::c_nm2A;
-        sendBox[2] = static_cast<float>(box[YY][YY]) * gmx::c_nm2A;
-        sendBox[3] = static_cast<float>(box[ZZ][XX]) * gmx::c_nm2A;
-        sendBox[4] = static_cast<float>(box[ZZ][YY]) * gmx::c_nm2A;
-        sendBox[5] = static_cast<float>(box[ZZ][ZZ]) * gmx::c_nm2A;
+        sendBox[0] = static_cast<float>(box[XX][XX]);
+        sendBox[1] = static_cast<float>(box[YY][XX]);
+        sendBox[2] = static_cast<float>(box[YY][YY]);
+	    sendBox[3] = static_cast<float>(box[ZZ][XX]);
+	    sendBox[4] = static_cast<float>(box[ZZ][YY]);
+	    sendBox[5] = static_cast<float>(box[ZZ][ZZ]);
         header_length = 6;
     }
     else
     {
         /* Prepare the buffer for orthorhombic box (3 elements) */
         tuplesize = 3 * sizeof(float);
-        sendBox[0] = static_cast<float>(box[XX][XX]) * gmx::c_nm2A;
-        sendBox[1] = static_cast<float>(box[YY][YY]) * gmx::c_nm2A;
-        sendBox[2] = static_cast<float>(box[ZZ][ZZ]) * gmx::c_nm2A;
-        header_length = 3;
+        sendBox[0] = static_cast<float>(box[XX][XX]);
+        sendBox[1] = static_cast<float>(box[YY][YY]);
+        sendBox[2] = static_cast<float>(box[ZZ][ZZ]);
+	    header_length = 3;
     }
 
+    
     /* Print the box dimensions */
-    printf("Sending box dimensions: ");
-    for (int i = 0; i < header_length; ++i) {
+    for (int i = 0; i < header_length; ++i) { /* 9 for 3x3 matrix */
         printf("%f ", sendBox[i]);
     }
     printf("\n");
@@ -723,7 +725,7 @@ bool ImdSession::Impl::tryConnect()
         }
 
         /* handshake with client */
-        if (imd_handshake(clientsocket, switchStatus)) /* added a new parameter to tell consumer to switch version or not */
+        if (imd_handshake(clientsocket)) /* added a new parameter to tell consumer to switch version or not */
         {
             issueFatalError("Connection failed.");
             return false;
@@ -924,12 +926,6 @@ void ImdSession::Impl::syncNodes(const t_commrec* cr, double t)
     /* Now we all set the (new) nstimd communication time step */
     nstimd = nstimd_new;
     
-    /*Let other nodes know whether we switched IMD version*/
-    if (PAR(cr))
-    {
-        block_bc(cr->mpi_comm_mygroup, switchStatus);
-    }
-    
     /* We're done if we don't allow pulling at all */
     if (!(bForceActivated))
     {
@@ -1065,27 +1061,6 @@ void ImdSession::Impl::readCommand()
                         .appendTextFormatted(" %s Update frequency will be set to %d.", IMDstr, nstimd_new);
                 break;
 
-	    /* deciding to switch to new version or not */
-            case IMDMessageType::V3:
-		if (length == version_switch_off)
-		{
-		    switchStatus = version_switch_off;
-		    GMX_LOG(mdLog_.warning)
-                        .appendTextFormatted(" %s Using default version of IMD.", IMDstr);
-		}
-		else if (length == version_switch_on)
-		{
-		    switchStatus = version_switch_on;
-		    GMX_LOG(mdLog_.warning)
-                        .appendTextFormatted(" %s Switching version of IMD.", IMDstr);
-		}
-		else
-		{
-		    GMX_LOG(mdLog_.warning)
-                        .appendTextFormatted(" %s Invalid version switch value: %d", IMDstr, length);
-		}
-		break;
-
             /* Catch all rule for the remaining IMD types which we don't expect */
             default:
                 GMX_LOG(mdLog_.warning)
@@ -1156,7 +1131,7 @@ void ImdSession::Impl::openOutputFile(const char*                 fn,
 }
 
 
-ImdSession::Impl::Impl(const MDLogger& mdlog) : mdLog_(mdlog), switchStatus(0)
+ImdSession::Impl::Impl(const MDLogger& mdlog) : mdLog_(mdlog)
 {
     init_block(&mols);
 }
@@ -1645,6 +1620,9 @@ bool ImdSession::Impl::run(int64_t step, bool bNS, const matrix box, gmx::ArrayR
         }
     }
 
+    /* Copy box matrix elements */
+    /* copy_mat(state->box, localBox); */
+
     /* is this an IMD communication step? */
     bool imdstep = do_per_step(step, nstimd);
 
@@ -1671,6 +1649,17 @@ bool ImdSession::Impl::run(int64_t step, bool bNS, const matrix box, gmx::ArrayR
         }
     }
 
+    if (bConnected && MAIN(cr_))
+    {
+        copy_mat(box, localBox);
+
+        /* printf("Box dimensions before sending: %f %f %f\n", box[XX][XX], box[YY][YY], box[ZZ][ZZ]); */
+        if (imd_send_box(clientsocket, box, boxsendbuf))
+        {
+            issueFatalError("Error sending box dimensions. Disconnecting client.");
+        }
+    }
+    
     wallcycle_stop(wcycle, WallCycleCounter::Imd);
 
     return imdstep;
@@ -1727,7 +1716,7 @@ void ImdSession::sendPositionsAndEnergies()
         impl_->issueFatalError("Error sending updated positions. Disconnecting client.");
     }
 
-    if (imd_send_box(impl_->clientsocket, impl_->box, impl_->boxsendbuf))
+    if (imd_send_box(impl_->clientsocket, impl_->localBox, impl_->boxsendbuf))
     {
         impl_->issueFatalError("Error sending box dimensions. Disconnecting client.");
     }
