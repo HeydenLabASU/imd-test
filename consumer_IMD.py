@@ -136,12 +136,12 @@ class IMDBox:
 
     def unpack_le(data, num_elements):
         '''read box dimensions in little endian format from bytearray'''
-        box_dimensions = struct.unpack(f'<{num_elements}f', data)
+        box_dimensions = struct.unpack(f'<9f', data)
         return IMDBox(box_dimensions)
 
     def unpack_be(data, num_elements):
         '''read box dimensions in big endian format from bytearray'''
-        box_dimensions = struct.unpack(f'>{num_elements}f', data)
+        box_dimensions = struct.unpack(f'>9f', data)
         return IMDBox(box_dimensions)
 
 def imd_readn(sock, n):
@@ -258,7 +258,7 @@ def handle_client_connection(sock,stride):
                 w.write(u)
             elif header.type == IMDType.IMD_BOX.value:
                 print(f'{header.length}')
-                box_dimensions_data = imd_readn(sock, header.length * 4)
+                box_dimensions_data = imd_readn(sock, 9 * 4)
                 if header.length == TRICLINIC_DIMENSIONS:
                     print('triclinic box')
                 elif header.length == ORTHORHOMBIC_DIMENSIONS:
