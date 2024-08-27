@@ -602,45 +602,35 @@ static int imd_send_rvecs(IMDSocket* socket, int nat, rvec* x, char* buffer)
 static int imd_send_box(IMDSocket* socket, const matrix box, char* buffer)
 {
     int32_t size;
-    int     tuplesize  = 9 * sizeof(float);
+    int     tuplesize;
     float   sendBox[9];  /* 6 elements for triclinic, 3 for orthorhombic */
     int     header_length;
-
-    sendBox[0] = static_cast<float>(box[XX][XX]);
-    sendBox[1] = static_cast<float>(box[XX][YY]);
-    sendBox[2] = static_cast<float>(box[XX][ZZ]);
-    sendBox[3] = static_cast<float>(box[YY][XX]);
-    sendBox[4] = static_cast<float>(box[YY][YY]);
-    sendBox[5] = static_cast<float>(box[YY][ZZ]);
-	sendBox[6] = static_cast<float>(box[ZZ][XX]);
-	sendBox[7] = static_cast<float>(box[ZZ][YY]);
-	sendBox[8] = static_cast<float>(box[ZZ][ZZ]);
 
     if (TRICLINIC(box))
     {
         /* Prepare the buffer for triclinic box (6 elements) */
-        /* tuplesize = 6 * sizeof(float); */
+        tuplesize = 6 * sizeof(float);
+        sendBox[0] = static_cast<float>(box[XX][XX]);
+        sendBox[1] = static_cast<float>(box[YY][XX]);
+        sendBox[2] = static_cast<float>(box[YY][YY]);
+	    sendBox[3] = static_cast<float>(box[ZZ][XX]);
+	    sendBox[4] = static_cast<float>(box[ZZ][YY]);
+	    sendBox[5] = static_cast<float>(box[ZZ][ZZ]);
         header_length = 6;
     }
     else
     {
         /* Prepare the buffer for orthorhombic box (3 elements) */
-        /* tuplesize = 3 * sizeof(float); */
-        /* sendBox[0] = static_cast<float>(box[XX][XX]);
-        sendBox[1] = static_cast<float>(box[XX][YY]);
-        sendBox[2] = static_cast<float>(box[XX][ZZ]);
-        sendBox[3] = static_cast<float>(box[YY][XX]);
-        sendBox[4] = static_cast<float>(box[YY][YY]);
-        sendBox[5] = static_cast<float>(box[YY][ZZ]);
-	    sendBox[6] = static_cast<float>(box[ZZ][XX]);
-	    sendBox[7] = static_cast<float>(box[ZZ][YY]);
-	    sendBox[8] = static_cast<float>(box[ZZ][ZZ]); */
+        tuplesize = 3 * sizeof(float);
+        sendBox[0] = static_cast<float>(box[XX][XX]);
+        sendBox[1] = static_cast<float>(box[YY][YY]);
+        sendBox[2] = static_cast<float>(box[ZZ][ZZ]);
 	    header_length = 3;
     }
 
     
     /* Print the box dimensions */
-    for (int i = 0; i < 9; ++i) { /* 9 for 3x3 matrix */
+    for (int i = 0; i < header_length; ++i) { /* 9 for 3x3 matrix */
         printf("%f ", sendBox[i]);
     }
     printf("\n");
@@ -1661,8 +1651,6 @@ bool ImdSession::Impl::run(int64_t step, bool bNS, const matrix box, gmx::ArrayR
 
     if (bConnected && MAIN(cr_))
     {
-        copy_mat(box, localBox);
-
         if (imd_send_box(clientsocket, box, boxsendbuf))
         {
             issueFatalError("Error sending box dimensions. Disconnecting client.");
