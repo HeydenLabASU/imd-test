@@ -129,6 +129,8 @@ typedef struct
     float   E_impr;  /**< improper dihedrals energy                     */
 } IMDEnergyBlock;
 
+/* Add IMDBox, IMDTime, IMDSessionInfo block */
+
 
 /*! \internal
  * \brief IMD (interactive molecular dynamics) communication structure.
@@ -207,7 +209,7 @@ public:
     /*! \brief Removes shifts of molecules diffused outside of the box. */
     void removeMolecularShifts(const matrix box) const;
     /*! \brief Initialize arrays used to assemble the positions from the other nodes. */
-    void prepareForPositionAssembly(const t_commrec* cr, gmx::ArrayRef<const gmx::RVec> coords);
+    void prepareForPositionAssembly(const t_commrec* cr, gmx::ArrayRef<const gmx::RVec> coords, gmx::ArrayRef<const gmx::RVec> vel);
     /*! \brief Interact with any connected VMD session */
     bool run(int64_t step, bool bNS, const matrix box, gmx::ArrayRef<const gmx::RVec> coords, double t);
 
@@ -238,6 +240,8 @@ public:
     rvec* xa_old = nullptr;
     //! Position of each local atom in the collective array.
     int* xa_ind = nullptr;
+    //! Velocities for all IMD atoms assembled on the main node.
+    rvec* velocity = nullptr;
 
     //! Global IMD frequency, known to all ranks.
     int nstimd = 1;
@@ -291,8 +295,11 @@ public:
     char* energysendbuf = nullptr;
     //! Buffer to make molecules whole before sending.
     rvec* sendxbuf = nullptr;
-    //! Send buffer for box dimensions.
+    //! Buffer for sending box dimensions.
     char* boxsendbuf = nullptr;
+    //! Buffer for sending velocity.
+    rvec* sendvbuf = nullptr;
+    char* velocitysendbuf = nullptr;
 
     //! Molecules block in IMD group.
     t_block mols;
@@ -476,6 +483,30 @@ static int imd_handshake(IMDSocket* socket)
    /* header.length = c_protocolVersion; /* client wants unswapped version */
     header.length = IMDV3;  /* use IMD V3 */
 
+    /* if (static_cast<int>(imd_write_multiple(socket, reinterpret_cast<char*>(&header), c_headerSize) != c_headerSize))
+    {
+        return -1;
+    } 
+    
+    fill_header(&header, IMDMessageType::SessionInfo, 7);
+    unsigned char body[7] = {0};
+    body[0] = imdsinfo->time;
+    body[1] = imdsinfo->energies;
+    body[2] = imdsinfo->box;
+    body[3] = imdsinfo->coords;
+    body[4] = imdsinfo->velocities;
+    body[5] = imdsinfo->forces;
+    body[6] = imdsinfo->wrap;
+
+    /* Hard code to send position, energy
+
+    if (static_cast<int>(imd_write_multiple(socket, reinterpret_cast<char*>(&header), c_headerSize) != c_headerSize) || 
+      static_cast<int>(imd_write_multiple(socket, reinterpret_cast<char*>(&body), 7) != 7)) 
+      {
+        return -1;
+      }
+    return 0; */
+
     return static_cast<int>(imd_write_multiple(socket, reinterpret_cast<char*>(&header), c_headerSize)
                             != c_headerSize);
 }
@@ -599,46 +630,69 @@ static int imd_send_rvecs(IMDSocket* socket, int nat, rvec* x, char* buffer)
     return static_cast<int>(imd_write_multiple(socket, buffer, size) != size);
 }
 
+/* Send velocity from rvec */
+static int imd_send_vel(IMDSocket* socket, int nat, rvec* v, char* buffer)
+{
+    int32_t size;
+    int     i;
+    float   sendv[3];
+    int     tuplesize = 3 * sizeof(float);
+
+    /* Required size for the send buffer */
+    size = c_headerSize + 3 * sizeof(float) * nat;
+
+    /* Prepare header */
+    fill_header(reinterpret_cast<IMDHeader*>(buffer), IMDMessageType::Velocities, static_cast<int32_t>(nat));
+    for (i = 0; i < nat; i++)
+    {
+        sendv[0] = static_cast<float>(v[i][0]);
+        sendv[1] = static_cast<float>(v[i][1]);
+        sendv[2] = static_cast<float>(v[i][2]);
+        memcpy(buffer + c_headerSize + i * tuplesize, sendv, tuplesize);
+    }
+
+    for (int i = 0; i < nat; ++i)
+    {
+        printf("%f ", sendv[i]);
+    }
+    printf("\n");
+
+
+    return static_cast<int>(imd_write_multiple(socket, buffer, size) != size);
+}
+
+
+/* Send box matrix from box */
 static int imd_send_box(IMDSocket* socket, const matrix box, char* buffer)
 {
     int32_t size;
-    int     tuplesize;
+    int     tuplesize  = 9 * sizeof(float);
     float   sendBox[9];  /* 6 elements for triclinic, 3 for orthorhombic */
     int     header_length;
 
-    if (TRICLINIC(box))
-    {
-        /* Prepare the buffer for triclinic box (6 elements) */
-        tuplesize = 6 * sizeof(float);
-        sendBox[0] = static_cast<float>(box[XX][XX]);
-        sendBox[1] = static_cast<float>(box[YY][XX]);
-        sendBox[2] = static_cast<float>(box[YY][YY]);
-	    sendBox[3] = static_cast<float>(box[ZZ][XX]);
-	    sendBox[4] = static_cast<float>(box[ZZ][YY]);
-	    sendBox[5] = static_cast<float>(box[ZZ][ZZ]);
-        header_length = 6;
-    }
-    else
-    {
-        /* Prepare the buffer for orthorhombic box (3 elements) */
-        tuplesize = 3 * sizeof(float);
-        sendBox[0] = static_cast<float>(box[XX][XX]);
-        sendBox[1] = static_cast<float>(box[YY][YY]);
-        sendBox[2] = static_cast<float>(box[ZZ][ZZ]);
-	    header_length = 3;
-    }
+    sendBox[0] = static_cast<float>(box[XX][XX]);
+    sendBox[1] = static_cast<float>(box[XX][YY]);
+    sendBox[2] = static_cast<float>(box[XX][ZZ]);
+    sendBox[3] = static_cast<float>(box[YY][XX]);
+    sendBox[4] = static_cast<float>(box[YY][YY]);
+    sendBox[5] = static_cast<float>(box[YY][ZZ]);
+	sendBox[6] = static_cast<float>(box[ZZ][XX]);
+	sendBox[7] = static_cast<float>(box[ZZ][YY]);
+	sendBox[8] = static_cast<float>(box[ZZ][ZZ]);
 
+    header_length = 36;
     
     /* Print the box dimensions */
-    for (int i = 0; i < header_length; ++i) { /* 9 for 3x3 matrix */
+    /* for (int i = 0; i < 9; ++i) // 9 for 3x3 matrix
+    {
         printf("%f ", sendBox[i]);
     }
-    printf("\n");
+    printf("\n"); */
 
     /* Required size for the send buffer */
     size = c_headerSize + tuplesize;
 
-    /* Prepare header with the correct length for triclinic or orthorhombic */
+    /* Prepare header with the correct length */
     fill_header(reinterpret_cast<IMDHeader*>(buffer), IMDMessageType::Box, header_length);
 
     /* Copy the box dimensions to send buffer */
@@ -1308,13 +1362,14 @@ void ImdSession::Impl::removeMolecularShifts(const matrix box) const
 }
 
 
-void ImdSession::Impl::prepareForPositionAssembly(const t_commrec* cr, gmx::ArrayRef<const gmx::RVec> coords)
+void ImdSession::Impl::prepareForPositionAssembly(const t_commrec* cr, gmx::ArrayRef<const gmx::RVec> coords, gmx::ArrayRef<const gmx::RVec> vel)
 {
     snew(xa, nat);
     snew(xa_ind, nat);
     snew(xa_shifts, nat);
     snew(xa_eshifts, nat);
     snew(xa_old, nat);
+    snew(velocity, nat);
 
     /* Save the original (whole) set of positions such that later the
      * molecule can always be made whole again */
@@ -1324,6 +1379,7 @@ void ImdSession::Impl::prepareForPositionAssembly(const t_commrec* cr, gmx::Arra
         {
             int ii = ind[i];
             copy_rvec(coords[ii], xa_old[i]);
+            copy_rvec(vel[ii], velocity[i]);
         }
     }
 
@@ -1343,7 +1399,9 @@ void ImdSession::Impl::prepareForPositionAssembly(const t_commrec* cr, gmx::Arra
     if (cr && havePPDomainDecomposition(cr))
     {
         gmx_bcast(nat * sizeof(xa_old[0]), xa_old, cr->mpi_comm_mygroup);
+        gmx_bcast(nat * sizeof(velocity[0]), velocity, cr->mpi_comm_mygroup);
     }
+    
 }
 
 
@@ -1363,6 +1421,7 @@ static void imd_check_integrator_parallel(const t_inputrec* ir, const t_commrec*
     }
 }
 
+/* add box parameter in makeImdSession and move copy_mat to here */
 std::unique_ptr<ImdSession> makeImdSession(const t_inputrec*              ir,
                                            const t_commrec*               cr,
                                            gmx_wallcycle*                 wcycle,
@@ -1371,6 +1430,7 @@ std::unique_ptr<ImdSession> makeImdSession(const t_inputrec*              ir,
                                            const gmx_mtop_t&              top_global,
                                            const MDLogger&                mdlog,
                                            gmx::ArrayRef<const gmx::RVec> coords,
+                                           gmx::ArrayRef<const gmx::RVec> vel,
                                            int                            nfile,
                                            const t_filenm                 fnm[],
                                            const gmx_output_env_t*        oenv,
@@ -1541,13 +1601,19 @@ std::unique_ptr<ImdSession> makeImdSession(const t_inputrec*              ir,
 
         /* Initialize send buffers with constant size */
         snew(impl->sendxbuf, impl->nat);
+        snew(impl->sendvbuf, impl->nat);
         snew(impl->energies, 1);
+
         int32_t bufxsize = c_headerSize + 3 * sizeof(float) * impl->nat;
         snew(impl->coordsendbuf, bufxsize);
 
-	/* Initialize the buffer for box dimensions */
+	    /* Initialize the buffer for box dimensions */
         int32_t boxbufsize = c_headerSize + 9 * sizeof(float);
         snew(impl->boxsendbuf, boxbufsize);
+
+        /* Initialize the buffer to send velocity */
+        int32_t velbufsize = c_headerSize + 3 * sizeof(float) * impl->nat;
+        snew(impl->velocitysendbuf, velbufsize);
     }
 
     /* do we allow interactive pulling? If so let the other nodes know. */
@@ -1575,7 +1641,7 @@ std::unique_ptr<ImdSession> makeImdSession(const t_inputrec*              ir,
     impl->syncNodes(cr, 0);
 
     /* Initialize arrays used to assemble the positions from the other nodes */
-    impl->prepareForPositionAssembly(cr, coords);
+    impl->prepareForPositionAssembly(cr, coords, vel);
 
     /* Initialize molecule blocks to make them whole later...*/
     if (MAIN(cr))
@@ -1620,9 +1686,6 @@ bool ImdSession::Impl::run(int64_t step, bool bNS, const matrix box, gmx::ArrayR
         }
     }
 
-    /* Copy box matrix elements */
-    /* copy_mat(state->box, localBox); */
-
     /* is this an IMD communication step? */
     bool imdstep = do_per_step(step, nstimd);
 
@@ -1651,10 +1714,9 @@ bool ImdSession::Impl::run(int64_t step, bool bNS, const matrix box, gmx::ArrayR
 
     if (bConnected && MAIN(cr_))
     {
-        if (imd_send_box(clientsocket, box, boxsendbuf))
-        {
-            issueFatalError("Error sending box dimensions. Disconnecting client.");
-        }
+        /* Copy box matrix elements of current timestep to initialized matrix localBox */
+        /* change location to where it makes sense the most (might have to define new function or add a box parameter in makeImdSession)*/
+        copy_mat(box, localBox);
     }
     
     wallcycle_stop(wcycle, WallCycleCounter::Imd);
@@ -1696,7 +1758,7 @@ void ImdSession::fillEnergyRecord(int64_t step, bool bHaveNewEnergies)
 }
 
 
-void ImdSession::sendPositionsAndEnergies()
+void ImdSession::sendPositionsAndEnergies() /*Add a new one for box,vel,forces*/
 {
     if (!impl_->sessionPossible || !impl_->clientsocket)
     {
@@ -1713,7 +1775,12 @@ void ImdSession::sendPositionsAndEnergies()
         impl_->issueFatalError("Error sending updated positions. Disconnecting client.");
     }
 
-    if (imd_send_box(impl_->clientsocket, impl_->localBox, impl_->boxsendbuf))
+    if (imd_send_vel(impl_->clientsocket, impl_->nat, impl_->velocity, impl_->velocitysendbuf))
+    {
+        impl_->issueFatalError("Error sending velocities. Disconnecting client.");
+    }
+
+    if (imd_send_box(impl_->clientsocket, impl_->localBox, impl_->boxsendbuf))  // test by changing impl_->localBox to box
     {
         impl_->issueFatalError("Error sending box dimensions. Disconnecting client.");
     }
