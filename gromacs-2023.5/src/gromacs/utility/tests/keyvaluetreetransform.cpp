@@ -35,6 +35,7 @@
 
 #include "gromacs/utility/keyvaluetreetransform.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,10 @@
 #include "testutils/refdata.h"
 #include "testutils/testasserts.h"
 
+namespace gmx
+{
+namespace test
+{
 namespace
 {
 
@@ -259,3 +264,5 @@ TEST(TreeValueTransformErrorTest, ConversionError)
 }
 
 } // namespace
+} // namespace test
+} // namespace gmx

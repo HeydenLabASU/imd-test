@@ -37,9 +37,11 @@
 #include "gmxpre.h"
 
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "gromacs/applied_forces/awh/bias.h"
+#include "gromacs/applied_forces/awh/dimparams.h"
 #include "gromacs/mdtypes/awh_params.h"
 
 namespace gmx
@@ -47,6 +49,7 @@ namespace gmx
 
 template<typename>
 class ArrayRef;
+class ISerializer;
 
 namespace test
 {
@@ -96,7 +99,9 @@ AwhTestParameters getAwhTestParameters(AwhHistogramGrowthType            eawhgro
                                        bool                              useAwhFep,
                                        double                            inputErrorScaling,
                                        int                               numFepLambdaStates,
-                                       int                               biasShareGroup = 0);
+                                       int                               biasShareGroup = 0,
+                                       AwhTargetType eTargetType         = AwhTargetType::Constant,
+                                       bool          scaleTargetByMetric = false);
 
 } // namespace test
 } // namespace gmx

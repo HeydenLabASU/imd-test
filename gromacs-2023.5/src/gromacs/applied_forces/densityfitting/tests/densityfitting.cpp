@@ -42,6 +42,10 @@
 
 #include "gromacs/applied_forces/densityfitting/densityfitting.h"
 
+#include <filesystem>
+#include <memory>
+#include <string>
+
 #include <gtest/gtest.h>
 
 #include "gromacs/gmxlib/network.h"
@@ -56,6 +60,7 @@
 #include "gromacs/mdtypes/mdatom.h"
 #include "gromacs/options/options.h"
 #include "gromacs/options/treesupport.h"
+#include "gromacs/utility/keyvaluetree.h"
 #include "gromacs/utility/keyvaluetreebuilder.h"
 #include "gromacs/utility/keyvaluetreetransform.h"
 #include "gromacs/utility/real.h"
@@ -84,7 +89,7 @@ public:
     {
         mdpValueBuilder_.rootObject().addValue(
                 "density-guided-simulation-reference-density-filename",
-                std::string(test::TestFileManager::getInputFilePath("ellipsoid-density.mrc").u8string()));
+                std::string(test::TestFileManager::getInputFilePath("ellipsoid-density.mrc").string()));
     }
 
     //! build an mdp options tree that sets the options for the density fitting module
@@ -108,7 +113,7 @@ public:
         assignOptionsFromKeyValueTree(&densityFittingModuleOptions, transformedMdpValues.object(), nullptr);
     }
 
-    void intializeForceProviders()
+    void initializeForceProviders()
     {
         densityFittingModule_->initForceProviders(&densityFittingForces_);
     }
@@ -127,7 +132,7 @@ TEST_F(DensityFittingTest, ForceProviderLackingInputThrows)
     makeDensityFittingModuleWithSetOptions();
 
     // Build the force provider, once all input data is gathered
-    EXPECT_ANY_THROW(intializeForceProviders());
+    EXPECT_ANY_THROW(initializeForceProviders());
 }
 
 TEST_F(DensityFittingTest, SingleAtom)
@@ -138,7 +143,7 @@ TEST_F(DensityFittingTest, SingleAtom)
 
     makeDensityFittingModuleWithSetOptions();
 
-    EXPECT_ANY_THROW(intializeForceProviders());
+    EXPECT_ANY_THROW(initializeForceProviders());
 }
 
 } // namespace

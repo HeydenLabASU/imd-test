@@ -42,16 +42,21 @@
 
 #include "datastorage.h"
 
+#include <cstddef>
+
 #include <algorithm>
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "gromacs/analysisdata/abstractdata.h"
 #include "gromacs/analysisdata/dataframe.h"
 #include "gromacs/analysisdata/datamodulemanager.h"
 #include "gromacs/analysisdata/paralleloptions.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/classhelpers.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/gmxassert.h"
@@ -603,7 +608,7 @@ AnalysisDataFrameBuilderPointer AnalysisDataStorageFrameData::finishFrame(bool b
     status_ = eFinished;
     if (!bMultipoint)
     {
-        GMX_RELEASE_ASSERT(ssize(pointSets_) == baseData().dataSetCount(),
+        GMX_RELEASE_ASSERT(gmx::ssize(pointSets_) == baseData().dataSetCount(),
                            "Point sets created for non-multipoint data");
         values_ = builder_->values_;
         builder_->clearValues();

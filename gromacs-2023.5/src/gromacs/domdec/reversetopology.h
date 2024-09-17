@@ -50,6 +50,7 @@
 
 #include "gromacs/mdlib/vsite.h"
 #include "gromacs/topology/idef.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/listoflists.h"
 
 struct gmx_domdec_t;
@@ -109,18 +110,18 @@ struct ReverseTopOptions
     ReverseTopOptions(gmx::DDBondedChecking ddBondedChecking,
                       bool                  includeConstraints = false,
                       bool                  includeSettles     = false) :
-        ddBondedChecking(ddBondedChecking),
-        includeConstraints(includeConstraints),
-        includeSettles(includeSettles)
+        ddBondedChecking_(ddBondedChecking),
+        includeConstraints_(includeConstraints),
+        includeSettles_(includeSettles)
     {
     }
 
     //! \brief For which bonded interactions to check assignments
-    const gmx::DDBondedChecking ddBondedChecking;
+    const gmx::DDBondedChecking ddBondedChecking_;
     //! \brief Whether constraints are stored in this reverse top
-    const bool includeConstraints;
+    const bool includeConstraints_;
     //! \brief Whether settles are stored in this reverse top
-    const bool includeSettles;
+    const bool includeSettles_;
 };
 
 //! \internal \brief Reverse topology class

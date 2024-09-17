@@ -43,13 +43,18 @@
 #include "gromacs/analysisdata/modules/lifetime.h"
 
 #include <cmath>
+#include <cstddef>
 
 #include <algorithm>
 #include <deque>
+#include <memory>
 #include <vector>
 
+#include "gromacs/analysisdata/abstractdata.h"
 #include "gromacs/analysisdata/dataframe.h"
 #include "gromacs/analysisdata/datastorage.h"
+#include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 
 namespace gmx
 {
@@ -155,7 +160,7 @@ void AnalysisDataLifetimeModule::pointsAdded(const AnalysisDataPointSetRef& poin
     // This assumption is strictly not necessary, but this is how the
     // framework works currently, and makes the code below simpler.
     GMX_ASSERT(points.firstColumn() == 0
-                       && points.lastColumn() == ssize(impl_->currentLifetimes_[dataSet]) - 1,
+                       && points.lastColumn() == gmx::ssize(impl_->currentLifetimes_[dataSet]) - 1,
                "Point set should cover all columns");
     for (int i = 0; i < points.columnCount(); ++i)
     {

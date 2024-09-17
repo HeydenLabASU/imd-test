@@ -40,8 +40,12 @@
 #include <cstring>
 
 #include <algorithm>
+#include <array>
+#include <iterator>
+#include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "gromacs/gmxpreprocess/fflibutil.h"
@@ -49,6 +53,7 @@
 #include "gromacs/gmxpreprocess/grompp_impl.h"
 #include "gromacs/topology/atoms.h"
 #include "gromacs/topology/symtab.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/fatalerror.h"
@@ -56,6 +61,7 @@
 #include "gromacs/utility/logger.h"
 #include "gromacs/utility/strdb.h"
 #include "gromacs/utility/stringtoenumvalueconverter.h"
+#include "gromacs/utility/stringutil.h"
 
 #include "hackblock.h"
 
@@ -224,7 +230,7 @@ static void check_rtp(gmx::ArrayRef<const PreprocessResidue> rtpDBEntry,
             GMX_LOG(logger.warning)
                     .asParagraph()
                     .appendTextFormatted(
-                            "Double entry %s in file %s", it->resname.c_str(), libfn.u8string().c_str());
+                            "Double entry %s in file %s", it->resname.c_str(), libfn.string().c_str());
         }
     }
 }
@@ -371,7 +377,7 @@ void readResidueDatabase(const std::filesystem::path&    rrdb,
         {
             gmx_fatal(FARGS,
                       "need 4 to 8 parameters in the header of .rtp file %s at line:\n%s\n",
-                      rrdb.u8string().c_str(),
+                      rrdb.string().c_str(),
                       line);
         }
         header_settings.bKeepAllGeneratedDihedrals    = (dum1 != 0);
@@ -430,7 +436,7 @@ void readResidueDatabase(const std::filesystem::path&    rrdb,
             gmx_fatal(FARGS, "in .rtp file at line:\n%s\n", line);
         }
         res->resname  = header;
-        res->filebase = filebase.u8string();
+        res->filebase = filebase.string();
 
         get_a_line(in, line, STRLEN);
         bError       = FALSE;
@@ -483,7 +489,7 @@ void readResidueDatabase(const std::filesystem::path&    rrdb,
                 gmx_fatal(FARGS,
                           "Found a second entry for '%s' in '%s'",
                           res->resname.c_str(),
-                          rrdb.u8string().c_str());
+                          rrdb.string().c_str());
             }
             if (bAllowOverrideRTP)
             {
@@ -493,7 +499,7 @@ void readResidueDatabase(const std::filesystem::path&    rrdb,
                                 "Found another rtp entry for '%s' in '%s',"
                                 " ignoring this entry and keeping the one from '%s.rtp'",
                                 res->resname.c_str(),
-                                rrdb.u8string().c_str(),
+                                rrdb.string().c_str(),
                                 found->filebase.c_str());
                 /* We should free all the data for this entry.
                  * The current code gives a lot of dangling pointers.
@@ -507,7 +513,7 @@ void readResidueDatabase(const std::filesystem::path&    rrdb,
                           "definition to override the second one, set the -rtpo option of pdb2gmx.",
                           res->resname.c_str(),
                           found->filebase.c_str(),
-                          rrdb.u8string().c_str());
+                          rrdb.string().c_str());
             }
         }
     }
@@ -580,7 +586,7 @@ std::string searchResidueDatabase(const std::string&                     key,
         {
             /* Allow a mismatch of at most a sign character (with warning) */
             int n = neq_str_sign(key.c_str(), it->resname.c_str());
-            if (n >= best && n + 1 >= gmx::index(key.length()) && n + 1 >= gmx::index(it->resname.length()))
+            if (n >= best && n + 1 >= gmx::Index(key.length()) && n + 1 >= gmx::Index(it->resname.length()))
             {
                 if (n == best)
                 {

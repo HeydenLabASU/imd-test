@@ -42,13 +42,16 @@
 
 #include "testutils/testfileredirector.h"
 
+#include <filesystem>
 #include <memory>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "gromacs/utility/path.h"
 #include "gromacs/utility/stringstream.h"
+#include "gromacs/utility/textstream.h"
 
 #include "testutils/stringtest.h"
 
@@ -56,6 +59,7 @@ namespace gmx
 {
 namespace test
 {
+class TestReferenceChecker;
 
 /********************************************************************
  * TestFileInputRedirector
@@ -117,7 +121,7 @@ TextOutputStream& TestFileOutputRedirector::standardOutput()
 TextOutputStreamPointer TestFileOutputRedirector::openTextOutputFile(const std::filesystem::path& filename)
 {
     Impl::StringStreamPointer stream(new StringOutputStream);
-    impl_->fileList_.emplace_back(filename.u8string(), stream);
+    impl_->fileList_.emplace_back(filename.string(), stream);
     return stream;
 }
 

@@ -200,7 +200,7 @@ struct tMPI_Thread_starter
 #ifdef __MINGW32__
 __attribute__((force_align_arg_pointer))
 #endif
-static void *tMPI_Thread_starter(void *arg)
+static void *tMPI_Thread_start(void *arg)
 {
     struct tMPI_Thread_starter *starter = (struct tMPI_Thread_starter *)arg;
     void *(*start_routine)(void*);
@@ -277,7 +277,7 @@ int tMPI_Thread_create(tMPI_Thread_t *thread, void *(*start_routine)(void *),
         return ret;
     }
 
-    ret = pthread_create(&((*thread)->th), NULL, tMPI_Thread_starter,
+    ret = pthread_create(&((*thread)->th), NULL, tMPI_Thread_start,
                          (void*)starter);
     if (ret != 0)
     {
@@ -913,7 +913,8 @@ int tMPI_Thread_barrier_wait(tMPI_Thread_barrier_t * barrier)
     /* Decrement the count atomically and check if it is zero.
      * This will only be true for the last thread calling us.
      */
-    if (--barrier->count <= 0)
+    barrier->count = barrier->count - 1;
+    if (barrier->count <= 0)
     {
         barrier->cycle = !barrier->cycle;
         barrier->count = barrier->threshold;

@@ -38,33 +38,50 @@
 #include "config.h"
 
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 
 #include <algorithm>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <vector>
 
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/ewald/ewald_utils.h"
 #include "gromacs/ewald/pme.h"
 #include "gromacs/fft/calcgrid.h"
 #include "gromacs/fileio/checkpoint.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/tpxio.h"
 #include "gromacs/gmxlib/network.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/math/units.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdlib/broadcaststructs.h"
 #include "gromacs/mdtypes/commrec.h"
 #include "gromacs/mdtypes/inputrec.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/state.h"
+#include "gromacs/random/seed.h"
 #include "gromacs/random/threefry.h"
 #include "gromacs/random/uniformintdistribution.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/mtop_atomloops.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/pleasecite.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
+
+struct gmx_output_env_t;
 
 /* #define TAKETIME */
 /* #define DEBUG  */
@@ -379,7 +396,7 @@ static inline real eps_self(real m,     /* grid coordinate in certain direction 
 
 
     tmp  = 2.0 * M_PI * m / K;
-    tmp1 = pow(tmp, -n);
+    tmp1 = std::pow(tmp, -n);
     denom += tmp1;
 
     return 2.0 * M_PI * nom / denom * K;

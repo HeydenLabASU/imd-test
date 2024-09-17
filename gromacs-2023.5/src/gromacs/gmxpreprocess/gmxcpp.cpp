@@ -47,10 +47,12 @@
 #include <filesystem>
 #include <memory>
 #include <unordered_set>
+#include <vector>
 
 #include <sys/types.h>
 
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
@@ -292,7 +294,7 @@ static int cpp_open_file(const std::filesystem::path&                         fi
     }
     if (cpp->fn.empty())
     {
-        gmx_fatal(FARGS, "Topology include file \"%s\" not found", filenm.u8string().c_str());
+        gmx_fatal(FARGS, "Topology include file \"%s\" not found", filenm.string().c_str());
     }
     /* If the file name has a path component, we need to change to that
      * directory.
@@ -311,7 +313,7 @@ static int cpp_open_file(const std::filesystem::path&                         fi
     cpp->parent = nullptr;
     if (cpp->fp == nullptr)
     {
-        cpp->fp = fopen(cpp->fn.u8string().c_str(), "r");
+        cpp->fp = fopen(cpp->fn.string().c_str(), "r");
     }
     if (cpp->fp == nullptr)
     {
@@ -738,7 +740,7 @@ char* cpp_error(gmx_cpp_t* handlep, int status)
     sprintf(buf,
             "%s - File %s, line %d\nLast line read:\n'%s'",
             ecpp[status],
-            (handle && !handle->fn.empty()) ? handle->fn.u8string().c_str() : "unknown",
+            (handle && !handle->fn.empty()) ? handle->fn.string().c_str() : "unknown",
             (handle) ? handle->line_nr : -1,
             !handle->line.empty() ? handle->line.c_str() : "");
 

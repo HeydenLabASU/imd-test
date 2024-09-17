@@ -41,12 +41,17 @@
 #ifndef GMX_APPLIED_FORCES_DENSITYFITTINGFORCEPROVIDER_H
 #define GMX_APPLIED_FORCES_DENSITYFITTINGFORCEPROVIDER_H
 
+#include <cstdint>
+
 #include <memory>
+#include <string>
 
 #include "gromacs/fileio/checkpoint.h"
 #include "gromacs/math/exponentialmovingaverage.h"
 #include "gromacs/mdspan/extensions.h"
+#include "gromacs/mdspan/mdspan.h"
 #include "gromacs/mdtypes/iforceprovider.h"
+#include "gromacs/utility/real.h"
 
 enum class PbcType : int;
 
@@ -56,6 +61,8 @@ namespace gmx
 class LocalAtomSet;
 class TranslateAndScale;
 struct DensityFittingParameters;
+class KeyValueTreeObject;
+class KeyValueTreeObjectBuilder;
 
 /*! \internal
  * \brief Parameters defining the internal density fitting force provider state.
@@ -67,20 +74,20 @@ struct DensityFittingForceProviderState
      */
     std::int64_t stepsSinceLastCalculation_ = 0;
     /*! \brief String naming variable holding the steps since last calculation.
-     * \note Changing this name will break backwards compability for checkpoint file writing.
+     * \note Changing this name will break backwards compatibility for checkpoint file writing.
      */
     static const std::string stepsSinceLastCalculationName_;
     //! The state of the exponential moving average of the similarity measure
     ExponentialMovingAverageState exponentialMovingAverageState_ = {};
     /*! \brief String naming variable holding the exponential moving average.
-     * \note Changing this name will break backwards compability for checkpoint file writing.
+     * \note Changing this name will break backwards compatibility for checkpoint file writing.
      */
     static const std::string exponentialMovingAverageStateName_;
 
     //! An additional factor scaling the force for adaptive force scaling
     real adaptiveForceConstantScale_ = 1.0_real;
     /*! \brief String naming variable holding the adaptive force constant scale.
-     * \note Changing this name will break backwards compability for checkpoint file writing.
+     * \note Changing this name will break backwards compatibility for checkpoint file writing.
      */
     static const std::string adaptiveForceConstantScaleName_;
 

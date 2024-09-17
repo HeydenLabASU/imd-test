@@ -37,23 +37,37 @@
 
 #include <climits>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+#include <algorithm>
+#include <array>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <vector>
 
 #include "gromacs/math/vectypes.h"
 #include "gromacs/mdtypes/atominfo.h"
 #include "gromacs/topology/atoms.h"
 #include "gromacs/topology/block.h"
 #include "gromacs/topology/exclusionblocks.h"
+#include "gromacs/topology/forcefieldparameters.h"
 #include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/mtop_atomloops.h"
+#include "gromacs/topology/symtab.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/topology/topology_enums.h"
 #include "gromacs/topology/topsort.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/listoflists.h"
+#include "gromacs/utility/range.h"
 #include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 
@@ -591,7 +605,7 @@ static void addMimicExclusions(gmx::ListOfLists<int>* excls, const gmx::ArrayRef
 
 static void sortFreeEnergyInteractionsAtEnd(const gmx_mtop_t& mtop, InteractionDefinitions* idef)
 {
-    std::vector<int64_t> atomInfo(mtop.natoms, 0);
+    std::vector<int32_t> atomInfo(mtop.natoms, 0);
 
 
     for (size_t mb = 0; mb < mtop.molblock.size(); mb++)
@@ -850,7 +864,7 @@ bool havePerturbedConstraints(const gmx_mtop_t& mtop)
     // This code assumes that all perturbed constraints parameters are actually used
     const auto& ffparams = mtop.ffparams;
 
-    for (gmx::index i = 0; i < gmx::ssize(ffparams.functype); i++)
+    for (gmx::Index i = 0; i < gmx::ssize(ffparams.functype); i++)
     {
         if (ffparams.functype[i] == F_CONSTR || ffparams.functype[i] == F_CONSTRNC)
         {

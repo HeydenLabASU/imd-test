@@ -45,16 +45,19 @@
 #include <cstdlib>
 
 #include <filesystem>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "gromacs/utility/directoryenumerator.h"
 #include "gromacs/utility/exceptions.h"
+#include "gromacs/utility/fileptr.h"
 #include "gromacs/utility/filestream.h"
 #include "gromacs/utility/path.h"
 #include "gromacs/utility/programcontext.h"
 #include "gromacs/utility/stringutil.h"
+#include "gromacs/utility/unique_cptr.h"
 
 #include "buildinfo.h"
 
@@ -80,10 +83,10 @@ public:
 std::filesystem::path DataFileFinder::Impl::getDefaultPath()
 {
     const InstallationPrefixInfo installPrefix = getProgramContext().installationPrefix();
-    if (!installPrefix.path.empty())
+    if (!installPrefix.path_.empty())
     {
-        const char* const dataPath = installPrefix.bSourceLayout ? "share" : GMX_INSTALL_GMXDATADIR;
-        return std::filesystem::path(installPrefix.path).append(dataPath).append("top");
+        const char* const dataPath = installPrefix.sourceLayoutTreeLike_ ? "share" : GMX_INSTALL_GMXDATADIR;
+        return std::filesystem::path(installPrefix.path_).append(dataPath).append("top");
     }
     return std::filesystem::path();
 }
@@ -170,7 +173,7 @@ std::filesystem::path DataFileFinder::findFile(const DataFileOptions& options) c
         const char* const envName   = (impl_ != nullptr ? impl_->envName_ : nullptr);
         const bool        bEnvIsSet = (impl_ != nullptr ? impl_->bEnvIsSet_ : false);
         std::string       message(
-                formatString("Library file '%s' not found", options.filename_.u8string().c_str()));
+                formatString("Library file '%s' not found", options.filename_.string().c_str()));
         if (options.bCurrentDir_)
         {
             message.append(" in current dir nor");
@@ -197,7 +200,7 @@ std::filesystem::path DataFileFinder::findFile(const DataFileOptions& options) c
         if (!defaultPath.empty())
         {
             message.append("\n  ");
-            message.append(defaultPath.u8string());
+            message.append(defaultPath.string());
             message.append(" (default)");
         }
         if (!bEnvIsSet && envName != nullptr)
@@ -221,7 +224,7 @@ std::vector<DataFileInfo> DataFileFinder::enumerateFiles(const DataFileOptions& 
     if (options.bCurrentDir_)
     {
         auto files = DirectoryEnumerator::enumerateFilesWithExtension(
-                std::filesystem::current_path(), options.filename_.u8string(), false);
+                std::filesystem::current_path(), options.filename_.string(), false);
         for (const auto& file : files)
         {
             result.emplace_back(".", file, false);
@@ -232,7 +235,7 @@ std::vector<DataFileInfo> DataFileFinder::enumerateFiles(const DataFileOptions& 
         for (const auto& path : impl_->searchPath_)
         {
             auto files = DirectoryEnumerator::enumerateFilesWithExtension(
-                    path, options.filename_.u8string(), false);
+                    path, options.filename_.string(), false);
             for (const auto& file : files)
             {
                 result.emplace_back(path, file, false);
@@ -243,7 +246,7 @@ std::vector<DataFileInfo> DataFileFinder::enumerateFiles(const DataFileOptions& 
     if (!defaultPath.empty())
     {
         auto files = DirectoryEnumerator::enumerateFilesWithExtension(
-                defaultPath, options.filename_.u8string(), false);
+                defaultPath, options.filename_.string(), false);
         for (const auto& file : files)
         {
             result.emplace_back(defaultPath, file, true);
@@ -255,7 +258,7 @@ std::vector<DataFileInfo> DataFileFinder::enumerateFiles(const DataFileOptions& 
         std::string message(
                 formatString("Could not find any files ending on '%s' in the "
                              "current directory or the GROMACS library search path",
-                             options.filename_.u8string().c_str()));
+                             options.filename_.string().c_str()));
         GMX_THROW(FileIOError(message));
     }
     return result;

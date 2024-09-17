@@ -39,11 +39,15 @@
 #include "checkpoint.h"
 
 #include <cerrno>
+#include <cinttypes>
 #include <cstdlib>
 #include <cstring>
 
+#include <algorithm>
 #include <array>
+#include <iterator>
 #include <memory>
+#include <type_traits>
 
 #include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/gmxfio.h"
@@ -75,20 +79,27 @@
 #include "gromacs/utility/baseversion.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/enumerationhelpers.h"
+#include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
 #include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/int64_to_int.h"
+#include "gromacs/utility/iserializer.h"
 #include "gromacs/utility/keyvaluetree.h"
 #include "gromacs/utility/keyvaluetreebuilder.h"
 #include "gromacs/utility/keyvaluetreeserializer.h"
 #include "gromacs/utility/programcontext.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
+#include "gromacs/utility/stringutil.h"
 #include "gromacs/utility/sysinfo.h"
 #include "gromacs/utility/textwriter.h"
 #include "gromacs/utility/txtdump.h"
 
 #include "buildinfo.h"
+
+
+enum class ChannelHistory : int;
 
 #define CPT_MAGIC1 171817
 #define CPT_MAGIC2 171819
@@ -386,7 +397,7 @@ enum class StatePullCommunicationEntry : int
 enum class CptElementType
 {
     integer,  //!< integer
-    real,     //!< float or double, not linked to precision of type real
+    realnum,  //!< float or double, not linked to precision of type real
     real3,    //!< float[3] or double[3], not linked to precision of type real
     matrix3x3 //!< float[3][3] or double[3][3], not linked to precision of type real
 };
@@ -872,7 +883,7 @@ static int doVectorLow(XDR*                           xd,
 template<typename T, typename Enum>
 static int doVector(XDR* xd, Enum ecpt, int sflags, std::vector<T>* vector, FILE* list, int numElements = -1)
 {
-    return doVectorLow<T>(xd, ecpt, sflags, numElements, nullptr, vector, list, CptElementType::real);
+    return doVectorLow<T>(xd, ecpt, sflags, numElements, nullptr, vector, list, CptElementType::realnum);
 }
 
 //! \brief Read/Write an ArrayRef<real>.
@@ -881,7 +892,7 @@ static int doRealArrayRef(XDR* xd, Enum ecpt, int sflags, gmx::ArrayRef<real> ve
 {
     real* v_real = vector.data();
     return doVectorLow<real, std::allocator<real>>(
-            xd, ecpt, sflags, vector.size(), &v_real, nullptr, list, CptElementType::real);
+            xd, ecpt, sflags, vector.size(), &v_real, nullptr, list, CptElementType::realnum);
 }
 
 //! Convert from view of RVec to view of real.
@@ -912,7 +923,7 @@ static int doRvecVector(XDR* xd, Enum ecpt, int sflags, PaddedVectorOfRVecType* 
         using realAllocator =
                 typename std::allocator_traits<typename PaddedVectorOfRVecType::allocator_type>::template rebind_alloc<real>;
         return doVectorLow<real, realAllocator>(
-                xd, ecpt, sflags, numReals, nullptr, nullptr, list, CptElementType::real);
+                xd, ecpt, sflags, numReals, nullptr, nullptr, list, CptElementType::realnum);
     }
 }
 
@@ -924,14 +935,14 @@ template<typename Enum>
 static int do_cpte_reals(XDR* xd, Enum ecpt, int sflags, int n, real** v, FILE* list)
 {
     return doVectorLow<real, std::allocator<real>>(
-            xd, ecpt, sflags, n, v, nullptr, list, CptElementType::real);
+            xd, ecpt, sflags, n, v, nullptr, list, CptElementType::realnum);
 }
 
 template<typename Enum>
 static int do_cpte_real(XDR* xd, Enum ecpt, int sflags, real* r, FILE* list)
 {
     return doVectorLow<real, std::allocator<real>>(
-            xd, ecpt, sflags, 1, &r, nullptr, list, CptElementType::real);
+            xd, ecpt, sflags, 1, &r, nullptr, list, CptElementType::realnum);
 }
 
 template<typename Enum>
@@ -960,7 +971,7 @@ template<typename Enum>
 static int do_cpte_doubles(XDR* xd, Enum ecpt, int sflags, int n, double** v, FILE* list)
 {
     return doVectorLow<double, std::allocator<double>>(
-            xd, ecpt, sflags, n, v, nullptr, list, CptElementType::real);
+            xd, ecpt, sflags, n, v, nullptr, list, CptElementType::realnum);
 }
 
 template<typename Enum>
@@ -1315,17 +1326,13 @@ static int do_cpt_footer(XDR* xd, CheckPointVersion file_version)
 
 static int do_cpt_state(XDR* xd, int fflags, t_state* state, FILE* list)
 {
-    GMX_RELEASE_ASSERT(
-            static_cast<unsigned int>(state->natoms) <= std::numeric_limits<unsigned int>::max() / 3,
-            "Can not write more than max_uint/3 atoms to checkpoint");
+    GMX_RELEASE_ASSERT(static_cast<unsigned int>(state->numAtoms())
+                               <= std::numeric_limits<unsigned int>::max() / 3,
+                       "Can not write more than max_int/3 atoms to checkpoint");
 
     int       ret    = 0;
-    const int sflags = state->flags;
-    // If reading, state->natoms was probably just read, so
-    // allocations need to be managed. If writing, this won't change
-    // anything that matters.
+    const int sflags = state->flags();
     using StateFlags = gmx::EnumerationArray<StateEntry, bool>;
-    state_change_natoms(state, state->natoms);
     for (auto i = StateFlags::keys().begin(); (i != StateFlags::keys().end() && ret == 0); i++)
     {
         if (fflags & enumValueToBitMask(*i))
@@ -1379,10 +1386,10 @@ static int do_cpt_state(XDR* xd, int fflags, t_state* state, FILE* list)
                     ret = do_cpte_real(xd, *i, sflags, &state->vol0, list);
                     break;
                 case StateEntry::X:
-                    ret = doRvecVector(xd, *i, sflags, &state->x, state->natoms, list);
+                    ret = doRvecVector(xd, *i, sflags, &state->x, state->numAtoms(), list);
                     break;
                 case StateEntry::V:
-                    ret = doRvecVector(xd, *i, sflags, &state->v, state->natoms, list);
+                    ret = doRvecVector(xd, *i, sflags, &state->v, state->numAtoms(), list);
                     break;
                 /* The RNG entries are no longer written,
                  * the next 4 lines are only for reading old files.
@@ -2436,7 +2443,7 @@ void write_checkpoint_data(t_fileio*                         fp,
 
     do_cpt_header(gmx_fio_getxdr(fp), FALSE, nullptr, &headerContents);
 
-    if ((do_cpt_state(gmx_fio_getxdr(fp), state->flags, state, nullptr) < 0)
+    if ((do_cpt_state(gmx_fio_getxdr(fp), state->flags(), state, nullptr) < 0)
         || (do_cpt_ekinstate(gmx_fio_getxdr(fp), headerContents.flags_eks, &state->ekinstate, nullptr) < 0)
         || (do_cpt_enerhist(gmx_fio_getxdr(fp), FALSE, headerContents.flags_enh, enerhist, nullptr) < 0)
         || (doCptPullHist(gmx_fio_getxdr(fp), FALSE, headerContents.flagsPullHistory, pullHist, nullptr) < 0)
@@ -2559,7 +2566,7 @@ static void check_match(FILE*                           fplog,
     {
         check_string(fplog,
                      "Program name",
-                     gmx::getProgramContext().fullBinaryPath().u8string().c_str(),
+                     gmx::getProgramContext().fullBinaryPath().string().c_str(),
                      headerContents.fprog,
                      &mm);
 
@@ -2662,7 +2669,7 @@ static void read_checkpoint(const std::filesystem::path&   fn,
     if (fplog)
     {
         fprintf(fplog, "\n");
-        fprintf(fplog, "Reading checkpoint file %s\n", fn.u8string().c_str());
+        fprintf(fplog, "Reading checkpoint file %s\n", fn.string().c_str());
         fprintf(fplog, "  file generated by:     %s\n", headerContents->fprog);
         fprintf(fplog, "  file generated at:     %s\n", headerContents->ftime);
         fprintf(fplog, "  GROMACS double prec.:  %d\n", headerContents->double_prec);
@@ -2672,13 +2679,13 @@ static void read_checkpoint(const std::filesystem::path&   fn,
         fprintf(fplog, "\n");
     }
 
-    if (headerContents->natoms != state->natoms)
+    if (headerContents->natoms != state->numAtoms())
     {
         gmx_fatal(FARGS,
                   "Checkpoint file is for a system of %d atoms, while the current system consists "
                   "of %d atoms",
                   headerContents->natoms,
-                  state->natoms);
+                  state->numAtoms());
     }
     if (headerContents->ngtc != state->ngtc)
     {
@@ -2718,16 +2725,16 @@ static void read_checkpoint(const std::filesystem::path&   fn,
         gmx_fatal(FARGS,
                   "Cannot change integrator during a checkpoint restart. Perhaps you should make a "
                   "new .tpr with grompp -f new.mdp -t %s",
-                  fn.u8string().c_str());
+                  fn.string().c_str());
     }
 
     // For modular simulator, no state object is populated, so we cannot do this check here!
-    if (headerContents->flags_state != state->flags && !useModularSimulator)
+    if (headerContents->flags_state != state->flags() && !useModularSimulator)
     {
         gmx_fatal(FARGS,
                   "Cannot change a simulation algorithm during a checkpoint restart. Perhaps you "
                   "should make a new .tpr with grompp -f new.mdp -t %s",
-                  fn.u8string().c_str());
+                  fn.string().c_str());
     }
 
     GMX_RELEASE_ASSERT(!(headerContents->isModularSimulatorCheckpoint && !useModularSimulator),
@@ -2971,12 +2978,12 @@ static CheckpointHeaderContents read_checkpoint_data(t_fileio*                  
 {
     CheckpointHeaderContents headerContents;
     do_cpt_header(gmx_fio_getxdr(fp), TRUE, nullptr, &headerContents);
-    state->natoms        = headerContents.natoms;
+    state->changeNumAtoms(headerContents.natoms);
     state->ngtc          = headerContents.ngtc;
     state->nnhpres       = headerContents.nnhpres;
     state->nhchainlength = headerContents.nhchainlength;
-    state->flags         = headerContents.flags_state;
-    int ret              = do_cpt_state(gmx_fio_getxdr(fp), state->flags, state, nullptr);
+    state->setFlags(headerContents.flags_state);
+    int ret = do_cpt_state(gmx_fio_getxdr(fp), state->flags(), state, nullptr);
     if (ret)
     {
         cp_error();
@@ -3067,7 +3074,7 @@ void read_checkpoint_trxframe(t_fileio* fp, t_trxframe* fr)
         return;
     }
 
-    fr->natoms    = state.natoms;
+    fr->natoms    = state.numAtoms();
     fr->bStep     = TRUE;
     fr->step      = int64_to_int(headerContents.step, "conversion of checkpoint to trajectory");
     fr->bTime     = TRUE;
@@ -3076,18 +3083,18 @@ void read_checkpoint_trxframe(t_fileio* fp, t_trxframe* fr)
     fr->lambda    = state.lambda[FreeEnergyPerturbationCouplingType::Fep];
     fr->fep_state = state.fep_state;
     fr->bAtoms    = FALSE;
-    fr->bX        = ((state.flags & enumValueToBitMask(StateEntry::X)) != 0);
+    fr->bX        = state.hasEntry(StateEntry::X);
     if (fr->bX)
     {
-        fr->x = makeRvecArray(state.x, state.natoms);
+        fr->x = makeRvecArray(state.x, state.numAtoms());
     }
-    fr->bV = ((state.flags & enumValueToBitMask(StateEntry::V)) != 0);
+    fr->bV = state.hasEntry(StateEntry::V);
     if (fr->bV)
     {
-        fr->v = makeRvecArray(state.v, state.natoms);
+        fr->v = makeRvecArray(state.v, state.numAtoms());
     }
     fr->bF   = FALSE;
-    fr->bBox = ((state.flags & enumValueToBitMask(StateEntry::Box)) != 0);
+    fr->bBox = state.hasEntry(StateEntry::Box);
     if (fr->bBox)
     {
         copy_mat(state.box, fr->box);
@@ -3104,12 +3111,12 @@ void list_checkpoint(const std::filesystem::path& fn, FILE* out)
     fp = gmx_fio_open(fn, "r");
     CheckpointHeaderContents headerContents;
     do_cpt_header(gmx_fio_getxdr(fp), TRUE, out, &headerContents);
-    state.natoms        = headerContents.natoms;
+    state.changeNumAtoms(headerContents.natoms);
     state.ngtc          = headerContents.ngtc;
     state.nnhpres       = headerContents.nnhpres;
     state.nhchainlength = headerContents.nhchainlength;
-    state.flags         = headerContents.flags_state;
-    ret                 = do_cpt_state(gmx_fio_getxdr(fp), state.flags, &state, out);
+    state.setFlags(headerContents.flags_state);
+    ret = do_cpt_state(gmx_fio_getxdr(fp), state.flags(), &state, out);
     if (ret)
     {
         cp_error();

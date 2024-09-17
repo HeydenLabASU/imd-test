@@ -42,7 +42,11 @@
 
 #include "referencetemperaturemanager.h"
 
+#include <utility>
+
 #include "gromacs/mdtypes/group.h"
+#include "gromacs/modularsimulator/modularsimulatorinterfaces.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/gmxassert.h"
 
 namespace gmx
@@ -65,7 +69,7 @@ void ReferenceTemperatureManager::setReferenceTemperature(ArrayRef<const real> n
     GMX_RELEASE_ASSERT(newReferenceTemperatures.ssize() == ekindata_->numTemperatureCouplingGroups(),
                        "Expected one new reference temperature per temperature group.");
 
-    for (gmx::index i = 0; i < gmx::ssize(newReferenceTemperatures); i++)
+    for (gmx::Index i = 0; i < gmx::ssize(newReferenceTemperatures); i++)
     {
         ekindata_->setCurrentReferenceTemperature(i, newReferenceTemperatures[i]);
     }

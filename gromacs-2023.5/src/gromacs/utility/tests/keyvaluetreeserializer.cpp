@@ -36,15 +36,27 @@
 #include "gromacs/utility/keyvaluetreeserializer.h"
 
 #include <cstddef>
+#include <cstdint>
+
+#include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/inmemoryserializer.h"
 #include "gromacs/utility/iserializer.h"
+#include "gromacs/utility/keyvaluetree.h"
 #include "gromacs/utility/keyvaluetreebuilder.h"
+#include "gromacs/utility/real.h"
 
 #include "testutils/refdata.h"
 
+namespace gmx
+{
+namespace test
+{
 namespace
 {
 
@@ -66,7 +78,7 @@ public:
 
     void doBool(bool* value) override { checker_.checkBoolean(*value, nullptr); }
     void doUChar(unsigned char* value) override { checker_.checkUChar(*value, nullptr); }
-    void doChar(char* /* value */) override { raiseAssert(); }
+    void doChar(char* value) override { checker_.checkChar(*value, nullptr); }
     void doUShort(unsigned short* /* value */) override { raiseAssert(); }
     void doInt(int* value) override { checker_.checkInteger(*value, nullptr); }
     void doInt32(int32_t* value) override { checker_.checkInt32(*value, nullptr); }
@@ -122,6 +134,8 @@ TEST_F(KeyValueTreeSerializerTest, EmptyTree)
 
 TEST_F(KeyValueTreeSerializerTest, SimpleObject)
 {
+    builder_.rootObject().addValue<char>("c", 'x');
+    builder_.rootObject().addValue<unsigned char>("u", 0170);
     builder_.rootObject().addValue<int>("foo", 1);
     builder_.rootObject().addValue<int32_t>("foo32", 1);
     builder_.rootObject().addValue<int64_t>("foo64", 1);
@@ -155,3 +169,5 @@ TEST_F(KeyValueTreeSerializerTest, ObjectWithObjects)
 }
 
 } // namespace
+} // namespace test
+} // namespace gmx

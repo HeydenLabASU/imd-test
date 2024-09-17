@@ -40,15 +40,24 @@
  */
 #include "gmxpre.h"
 
+#include <cmath>
+
 #include <array>
+#include <string>
 
 #include <gtest/gtest.h>
 
 #include "gromacs/math/do_fit.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
+#include "gromacs/utility/real.h"
 
 #include "testutils/testasserts.h"
 
+namespace gmx
+{
+namespace test
+{
 namespace
 {
 
@@ -79,7 +88,7 @@ TEST_F(StructureSimilarityTest, StructureComparedToSelfHasZeroRho)
 
 TEST_F(StructureSimilarityTest, YieldsCorrectRMSD)
 {
-    EXPECT_REAL_EQ_TOL(sqrt(2.0), rmsdev(c_nAtoms, m_, x1_, x2_), defaultRealTolerance());
+    EXPECT_REAL_EQ_TOL(std::sqrt(2.0), rmsdev(c_nAtoms, m_, x1_, x2_), defaultRealTolerance());
 }
 
 TEST_F(StructureSimilarityTest, YieldsCorrectRho)
@@ -89,8 +98,9 @@ TEST_F(StructureSimilarityTest, YieldsCorrectRho)
 
 TEST_F(StructureSimilarityTest, YieldsCorrectRMSDWithIndex)
 {
-    EXPECT_REAL_EQ_TOL(
-            sqrt(2.0), rmsdev_ind(index_.size(), index_.data(), m_, x1_, x2_), defaultRealTolerance());
+    EXPECT_REAL_EQ_TOL(std::sqrt(2.0),
+                       rmsdev_ind(index_.size(), index_.data(), m_, x1_, x2_),
+                       defaultRealTolerance());
 }
 
 TEST_F(StructureSimilarityTest, YieldsCorrectRhoWidthIndex)
@@ -99,3 +109,5 @@ TEST_F(StructureSimilarityTest, YieldsCorrectRhoWidthIndex)
 }
 
 } // namespace
+} // namespace test
+} // namespace gmx

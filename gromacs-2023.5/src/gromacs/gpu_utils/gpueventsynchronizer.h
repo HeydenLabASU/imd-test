@@ -50,10 +50,7 @@
 
 #include "device_event.h"
 
-#ifdef __clang__
-#    pragma clang diagnostic push
-#    pragma clang diagnostic ignored "-Wmissing-noreturn"
-#endif
+CLANG_DIAGNOSTIC_IGNORE("-Wmissing-noreturn")
 
 /*! \libinternal \brief
  * A class which allows for CPU thread to mark and wait for certain GPU stream execution point.
@@ -147,12 +144,12 @@ public:
     //NOLINTNEXTLINE(readability-convert-member-functions-to-static)
     inline void markExternalEventWhileCapturingGraph(const DeviceStream& deviceStream)
     {
-#if GMX_HAVE_CUDA_GRAPH_SUPPORT
+#if GMX_HAVE_GPU_GRAPH_SUPPORT && GMX_GPU_CUDA
         event_.markExternalEventWhileCapturingGraph(deviceStream);
 #else
         GMX_UNUSED_VALUE(deviceStream);
         GMX_THROW(gmx::InternalError(
-                "markExternalEventWhileCapturingGraph called without CUDA graph support"));
+                "markExternalEventWhileCapturingGraph called without GPU graph support"));
 #endif
         consumptionCount_ = 0;
     }
@@ -219,18 +216,16 @@ public:
     //NOLINTNEXTLINE(readability-convert-member-functions-to-static)
     inline void enqueueExternalWaitEventWhileCapturingGraph(const DeviceStream& deviceStream)
     {
-#if GMX_HAVE_CUDA_GRAPH_SUPPORT
+#if GMX_HAVE_GPU_GRAPH_SUPPORT && GMX_GPU_CUDA
         event_.enqueueExternalWaitEventWhileCapturingGraph(deviceStream);
 #else
         GMX_UNUSED_VALUE(deviceStream);
         GMX_THROW(gmx::InternalError(
-                "enqueueExternalWaitEventWhileCapturingGraph called without CUDA graph support"));
+                "enqueueExternalWaitEventWhileCapturingGraph called without GPU graph support"));
 #endif
         resetIfFullyConsumed();
     }
-#ifdef __clang__
-#    pragma clang diagnostic pop
-#endif
+    CLANG_DIAGNOSTIC_RESET
     //! Resets the event to unmarked state, releasing the underlying event object if needed.
     inline void reset()
     {

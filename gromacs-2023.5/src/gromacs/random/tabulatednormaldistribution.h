@@ -46,6 +46,8 @@
 #define GMX_RANDOM_TABULATEDNORMALDISTRIBUTION_H
 
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 
 #include <array>
 #include <limits>
@@ -230,7 +232,7 @@ public:
     {
     }
 
-    /*! \brief Smallest value that can be generated in normal distrubiton.
+    /*! \brief Smallest value that can be generated in normal distributon.
      *
      * \note The smallest value is not -infinity with a table, but it
      *       depends on the table resolution. With 14 bits, this is roughly

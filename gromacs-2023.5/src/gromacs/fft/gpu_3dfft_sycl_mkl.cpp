@@ -39,11 +39,8 @@
  *  \author Mark Abraham <mark.j.abraham@gmail.com>
  *  \ingroup module_fft
  *
- *  In DPC++, we use Intel oneMKL to perform the FFT. It requires using the binary version of
- *  MKL, since the open-source one does not support FFT yet (https://github.com/oneapi-src/oneMKL/issues/27).
- *
- *  There are issues with out-of-place transform, existing in oneAPI 2021.2-2021.4, so
- *  we allow only in-place transforms for these versions.
+ *  In DPC++, we use Intel oneMKL to perform the FFT. Currently, we only support binary version
+ *  of oneMKL, see #4744.
  */
 
 #include "gmxpre.h"
@@ -65,21 +62,29 @@ class DeviceContext;
 #    error This file can only be compiled with Intel DPC++ compiler
 #endif
 
-#if (!GMX_FFT_MKL)
-#    error Must use MKL library for FFT when compiling with Intel DPC++ compiler
+#if (!GMX_FFT_MKL && !GMX_GPU_FFT_ONEMKL)
+#    error Must use MKL library CPU FFT when using MKL for GPU FFT and Intel DPC++ compiler
 #endif
 
 #include <cstddef>
 #pragma clang diagnostic ignored "-Wsuggest-override" // can be removed when support for 2022.0 is dropped
 #pragma clang diagnostic ignored "-Wundefined-func-template"
-#include <mkl_version.h>
 
-#include <oneapi/mkl/dfti.hpp>
+#if GMX_GPU_FFT_MKL
+// Using closed-source MKL.
+#    include <oneapi/mkl/dfti.hpp>
+#    define PLACEMENT_INPLACE DFTI_INPLACE
+#    define PLACEMENT_NOT_INPLACE DFTI_NOT_INPLACE
+#    define COMPLEX_COMPLEX_STORAGE DFTI_COMPLEX_COMPLEX
+#else
+// Using oneMKL interface library. (GMX_GPU_FFT_ONEMKL)
+#    include <oneapi/mkl/dft.hpp>
+#    define PLACEMENT_INPLACE oneapi::mkl::dft::config_value::INPLACE
+#    define PLACEMENT_NOT_INPLACE oneapi::mkl::dft::config_value::NOT_INPLACE
+#    define COMPLEX_COMPLEX_STORAGE oneapi::mkl::dft::config_value::COMPLEX_COMPLEX
+#endif // GMX_GPU_FFT_MKL
+
 #include <oneapi/mkl/exceptions.hpp>
-
-// oneAPI 2021.2.0 to 2021.4.0 have issues with backward out-of-place transform.
-// The issue is fixed in 2022.0.1 (20220000).
-static constexpr bool sc_mklHasBuggyOutOfPlaceFFT = (INTEL_MKL_VERSION <= 20210004);
 
 namespace gmx
 {
@@ -122,9 +127,6 @@ Gpu3dFft::ImplSyclMkl::ImplSyclMkl(bool allocateRealGrid,
     GMX_RELEASE_ASSERT(gridSizesInXForEachRank.size() == 1 && gridSizesInYForEachRank.size() == 1,
                        "Multi-rank FFT decomposition not implemented with the SYCL MKL backend");
 
-    GMX_RELEASE_ASSERT(!(sc_mklHasBuggyOutOfPlaceFFT && performOutOfPlaceFFT),
-                       "The version of MKL used does not properly support out-of-place FFTs");
-
     GMX_ASSERT(checkDeviceBuffer(*realGrid,
                                  realGridSizePadded[XX] * realGridSizePadded[YY] * realGridSizePadded[ZZ]),
                "Real grid buffer is too small for the declared padded size");
@@ -150,14 +152,14 @@ Gpu3dFft::ImplSyclMkl::ImplSyclMkl(bool allocateRealGrid,
         1
     };
 
-    const auto placement = performOutOfPlaceFFT ? DFTI_NOT_INPLACE : DFTI_INPLACE;
+    const auto placement = performOutOfPlaceFFT ? PLACEMENT_NOT_INPLACE : PLACEMENT_INPLACE;
 
     try
     {
         using oneapi::mkl::dft::config_param;
         r2cDescriptor_.set_value(config_param::INPUT_STRIDES, realGridStrides.data());
         r2cDescriptor_.set_value(config_param::OUTPUT_STRIDES, complexGridStrides.data());
-        r2cDescriptor_.set_value(config_param::CONJUGATE_EVEN_STORAGE, DFTI_COMPLEX_COMPLEX);
+        r2cDescriptor_.set_value(config_param::CONJUGATE_EVEN_STORAGE, COMPLEX_COMPLEX_STORAGE);
         r2cDescriptor_.set_value(config_param::PLACEMENT, placement);
         r2cDescriptor_.commit(queue_);
     }
@@ -172,7 +174,7 @@ Gpu3dFft::ImplSyclMkl::ImplSyclMkl(bool allocateRealGrid,
         using oneapi::mkl::dft::config_param;
         c2rDescriptor_.set_value(config_param::INPUT_STRIDES, complexGridStrides.data());
         c2rDescriptor_.set_value(config_param::OUTPUT_STRIDES, realGridStrides.data());
-        c2rDescriptor_.set_value(config_param::CONJUGATE_EVEN_STORAGE, DFTI_COMPLEX_COMPLEX);
+        c2rDescriptor_.set_value(config_param::CONJUGATE_EVEN_STORAGE, COMPLEX_COMPLEX_STORAGE);
         c2rDescriptor_.set_value(config_param::PLACEMENT, placement);
         c2rDescriptor_.commit(queue_);
     }
@@ -196,7 +198,8 @@ void Gpu3dFft::ImplSyclMkl::perform3dFft(gmx_fft_direction dir, CommandEvent* /*
         case GMX_FFT_REAL_TO_COMPLEX:
             try
             {
-                oneapi::mkl::dft::compute_forward(r2cDescriptor_, realGrid_, complexGrid);
+                oneapi::mkl::dft::compute_forward<Descriptor, float, float>(
+                        r2cDescriptor_, realGrid_, complexGrid);
             }
             catch (oneapi::mkl::exception& exc)
             {
@@ -207,7 +210,8 @@ void Gpu3dFft::ImplSyclMkl::perform3dFft(gmx_fft_direction dir, CommandEvent* /*
         case GMX_FFT_COMPLEX_TO_REAL:
             try
             {
-                oneapi::mkl::dft::compute_backward(c2rDescriptor_, complexGrid, realGrid_);
+                oneapi::mkl::dft::compute_backward<Descriptor, float, float>(
+                        c2rDescriptor_, complexGrid, realGrid_);
             }
             catch (oneapi::mkl::exception& exc)
             {

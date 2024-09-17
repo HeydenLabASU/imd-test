@@ -46,9 +46,14 @@
 
 #include "gromacs/fileio/trxio.h"
 #include "gromacs/trajectory/trajectoryframe.h"
+#include "gromacs/utility/gmxassert.h"
 
 namespace gmx
 {
+
+ProcessFrameConversion::ProcessFrameConversion() = default;
+
+ProcessFrameConversion::~ProcessFrameConversion() = default;
 
 void ProcessFrameConversion::addAndCheckGuarantee(const unsigned long flag)
 {
@@ -120,8 +125,8 @@ void ProcessFrameConversion::convertFrame(t_trxframe* input)
     addAndCheckGuarantee(guarantee());
     for (auto& method : moduleChain_)
     {
-        method.module->convertFrame(input);
-        addAndCheckGuarantee(method.module->guarantee());
+        method.module_->convertFrame(input);
+        addAndCheckGuarantee(method.module_->guarantee());
     }
 }
 } // namespace gmx

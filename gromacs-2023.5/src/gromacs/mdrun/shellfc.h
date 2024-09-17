@@ -34,12 +34,15 @@
 #ifndef GMX_MDLIB_SHELLFC_H
 #define GMX_MDLIB_SHELLFC_H
 
+#include <cstdint>
 #include <cstdio>
 
 #include "gromacs/math/vectypes.h"
 #include "gromacs/timing/wallcycle.h"
 #include "gromacs/topology/atoms.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/enumerationhelpers.h"
+#include "gromacs/utility/real.h"
 
 class DDBalanceRegionHandler;
 struct gmx_enerdata_t;
@@ -56,6 +59,7 @@ struct t_mdatoms;
 struct t_nrnb;
 class t_state;
 class CpuPpLongRangeNonbondeds;
+struct t_commrec;
 
 namespace gmx
 {
@@ -66,6 +70,7 @@ class ArrayRefWithPadding;
 class Constraints;
 class ForceBuffersView;
 class ImdSession;
+struct MDModulesNotifiers;
 class MdrunScheduleWorkload;
 class VirtualSitesHandler;
 } // namespace gmx
@@ -96,10 +101,10 @@ void relax_shell_flexcon(FILE*                               log,
                          gmx_enfrot*                         enforcedRotation,
                          int64_t                             mdstep,
                          const t_inputrec*                   inputrec,
+                         const gmx::MDModulesNotifiers&      mdModulesNotifiers,
                          gmx::ImdSession*                    imdSession,
                          pull_t*                             pull_work,
                          gmx_bool                            bDoNS,
-                         int                                 force_flags,
                          const gmx_localtop_t*               top,
                          gmx::Constraints*                   constr,
                          gmx_enerdata_t*                     enerd,
@@ -117,7 +122,7 @@ void relax_shell_flexcon(FILE*                               log,
                          gmx_wallcycle*                      wcycle,
                          gmx_shellfc_t*                      shfc,
                          t_forcerec*                         fr,
-                         gmx::MdrunScheduleWorkload*         runScheduleWork,
+                         const gmx::MdrunScheduleWorkload&   runScheduleWork,
                          double                              t,
                          rvec                                mu_tot,
                          gmx::VirtualSitesHandler*           vsite,

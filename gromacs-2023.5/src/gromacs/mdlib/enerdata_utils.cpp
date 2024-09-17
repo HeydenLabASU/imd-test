@@ -36,13 +36,23 @@
 #include "enerdata_utils.h"
 
 #include <cmath>
+#include <cstdio>
+
+#include <algorithm>
+#include <array>
+#include <utility>
+#include <vector>
 
 #include "gromacs/gmxlib/network.h"
 #include "gromacs/mdtypes/commrec.h"
 #include "gromacs/mdtypes/enerdata.h"
 #include "gromacs/mdtypes/inputrec.h"
+#include "gromacs/mdtypes/md_enums.h"
+#include "gromacs/topology/ifunc.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/gmxassert.h"
 
 ForeignLambdaTerms::ForeignLambdaTerms(
         const gmx::EnumerationArray<FreeEnergyPerturbationCouplingType, std::vector<double>>* allLambdas) :
@@ -277,7 +287,7 @@ void ForeignLambdaTerms::finalizePotentialContributions(
            lambda are automatically zeroed */
 
         double enerpart_lambda = 0;
-        for (gmx::index j = 0; j < lambda.ssize(); j++)
+        for (gmx::Index j = 0; j < lambda.ssize(); j++)
         {
             /* Note that this loop is over all dhdl components, not just the separated ones */
             const double dlam = fepvals.all_lambda[j][i] - lambda[j];

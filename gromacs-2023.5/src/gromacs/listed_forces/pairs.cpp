@@ -45,10 +45,16 @@
 #include "pairs.h"
 
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
+
+#include <filesystem>
+#include <memory>
 
 #include "gromacs/listed_forces/bonded.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/mdtypes/enerdata.h"
 #include "gromacs/mdtypes/forcerec.h"
 #include "gromacs/mdtypes/group.h"
 #include "gromacs/mdtypes/interaction_const.h"
@@ -62,7 +68,11 @@
 #include "gromacs/simd/simd_math.h"
 #include "gromacs/simd/vector_operations.h"
 #include "gromacs/tables/forcetable.h"
+#include "gromacs/topology/idef.h"
+#include "gromacs/utility/alignedallocator.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
 
@@ -214,9 +224,9 @@ static real free_energy_evaluate_single(real                                    
     c12[0] = c12A;
     c12[1] = c12B;
 
-    const real rpm2 = r2 * r2;   /* r4 */
-    const real rp   = rpm2 * r2; /* r6 */
-    const real r    = sqrt(r2);  /* r1 */
+    const real rpm2 = r2 * r2;       /* r4 */
+    const real rp   = rpm2 * r2;     /* r6 */
+    const real r    = std::sqrt(r2); /* r1 */
 
     /* Loop over state A(0) and B(1) */
     for (i = 0; i < 2; i++)
@@ -607,7 +617,7 @@ static real do_pairs_general(int                                 ftype,
             etiNR == 3,
             "Pair-interaction code that uses GROMACS interaction tables supports exactly 3 tables");
     GMX_ASSERT(
-            fr->pairsTable->interaction == TableInteraction::ElectrostaticVdwRepulsionVdwDispersion,
+            fr->pairsTable->interaction_ == TableInteraction::ElectrostaticVdwRepulsionVdwDispersion,
             "Pair interaction kernels need a table with Coulomb, repulsion and dispersion entries");
 
     const real epsfac = fr->ic->epsfac;
@@ -676,7 +686,7 @@ static real do_pairs_general(int                                 ftype,
              * disadvantage is that the warning is printed twice */
             if (!warned_rlimit)
             {
-                warning_rlimit(x, ai, aj, global_atom_index, sqrt(r2), fr->pairsTable->interactionRange);
+                warning_rlimit(x, ai, aj, global_atom_index, std::sqrt(r2), fr->pairsTable->interactionRange);
                 warned_rlimit = TRUE;
             }
             continue;

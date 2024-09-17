@@ -44,12 +44,21 @@
 #include "gromacs/pbcutil/com.h"
 
 #include <algorithm>
+#include <iterator>
 #include <vector>
 
+#include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/pbcutil/pbc.h"
+#include "gromacs/pbcutil/pbcenums.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/range.h"
+#include "gromacs/utility/real.h"
+
+enum class PbcType : int;
 
 namespace gmx
 {
@@ -122,7 +131,8 @@ RVec calculateCOM(ArrayRef<const RVec> x, const gmx_moltype_t& moltype, const in
 
 void shiftAtoms(const RVec& shift, ArrayRef<RVec> x)
 {
-    std::transform(std::begin(x), std::end(x), std::begin(x), [shift](RVec x) { return x + shift; });
+    std::transform(
+            std::begin(x), std::end(x), std::begin(x), [shift](RVec elemX) { return elemX + shift; });
 }
 
 void placeCoordinatesWithCOMInBox(const PbcType&      pbcType,

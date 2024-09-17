@@ -40,18 +40,32 @@
 
 #include "gromacs/mdlib/calc_verletbuf.h"
 
+#include <cstdlib>
+
 #include <algorithm>
+#include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "gromacs/math/functions.h"
+#include "gromacs/math/vectypes.h"
+#include "gromacs/mdtypes/inputrec.h"
+#include "gromacs/topology/topology.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 
 #include "testutils/testasserts.h"
+#include "testutils/topologyhelpers.h"
+
+#include "watersystem.h"
 
 namespace gmx
 {
-
+namespace test
+{
 namespace
 {
 
@@ -88,6 +102,51 @@ TEST(EffectiveAtomDensity, WeightingWorks)
     EXPECT_FLOAT_EQ(density, referenceDensity);
 }
 
+TEST(AtomNonbondedAndKineticProperties, IsAccurate)
+{
+    const real c_resolution = 0.1;
+
+    std::vector<real> invMasses = { 8.0, 10.149, 20.051 };
+    std::vector<real> charges   = { -2.0, 0.149, -0.951 };
+
+    for (Index i = 0; i < gmx::ssize(invMasses); i++)
+    {
+        AtomNonbondedAndKineticProperties props({ c_resolution, c_resolution, c_resolution });
+        props.setMassTypeCharge(1 / invMasses[i], 0, charges[i]);
+
+        EXPECT_LT(std::abs(props.invMass() - invMasses[i]), 0.5 * c_resolution);
+        EXPECT_LT(std::abs(props.charge() - charges[i]), 0.5 * c_resolution);
+    }
+}
+
+TEST(AtomNonbondedAndKineticProperties, ConstraintsWork)
+{
+    const real c_resolution = 0.1;
+
+    std::vector<real> invMasses = { 8.0, 10.149, 20.051 };
+    std::vector<real> lengths   = { 0.0, 3.2499, 4.9501 };
+
+    for (Index i = 0; i < gmx::ssize(invMasses); i++)
+    {
+        AtomNonbondedAndKineticProperties props({ c_resolution, c_resolution, c_resolution });
+        props.setMassTypeCharge(1 / invMasses[i], 0, 0);
+        if (i > 0)
+        {
+            // Add a first constraint with low mass
+            props.addConstraint(1 / invMasses[i], 1.0);
+            // Add a second one with higher mass that is the one that should be used
+            props.addConstraint(2 / invMasses[i], lengths[i]);
+        }
+
+        EXPECT_EQ(props.hasConstraint(), i > 0);
+        if (props.hasConstraint())
+        {
+            EXPECT_LT(std::abs(props.constraintInvMass() - 0.5 * invMasses[i]), 0.5 * c_resolution);
+            EXPECT_LT(std::abs(props.constraintLength() - lengths[i]), 0.5 * c_resolution);
+        }
+    }
+}
+
 class VerletBufferConstraintTest : public ::testing::Test
 {
 };
@@ -119,13 +178,15 @@ TEST_F(VerletBufferConstraintTest, EqualMasses)
     real mass = 10;
     real arm  = 0.1;
 
-    atom_nonbonded_kinetic_prop_t prop;
-    prop.mass     = mass;
-    prop.type     = -1;
-    prop.q        = 0;
-    prop.bConstr  = TRUE;
-    prop.con_mass = mass;
-    prop.con_len  = 2 * arm;
+    AtomNonbondedAndKineticPropertiesResolutions resolutions;
+
+    resolutions.invMassResolution          = 1 / mass * 0.01;
+    resolutions.chargeResolution           = 1;
+    resolutions.constraintLengthResolution = 2 * arm * 0.01;
+
+    AtomNonbondedAndKineticProperties prop(resolutions);
+    prop.setMassTypeCharge(mass, -1, 0);
+    prop.addConstraint(mass, 2 * arm);
 
     // We scan a range of rotation distributions by scanning over T.
     int  numPointsBeforeMax = 0;
@@ -139,7 +200,7 @@ TEST_F(VerletBufferConstraintTest, EqualMasses)
 
         // Get the estimate for the Cartesian displacement.
         real sigma2_2d, sigma2_3d;
-        constrained_atom_sigma2(ktFac, &prop, &sigma2_2d, &sigma2_3d);
+        constrained_atom_sigma2(ktFac, prop, &sigma2_2d, &sigma2_3d);
 
         // Check we are not decreasing sigma2_2d
         EXPECT_EQ(std::max(sigma2_2d_prev, sigma2_2d), sigma2_2d);
@@ -172,6 +233,72 @@ TEST_F(VerletBufferConstraintTest, EqualMasses)
             "before and after the location of the maximum value for the exact formula.");
 }
 
-} // namespace
+// Issue #5002
+TEST(EffectiveAtomDensity, LargeValuesHandledWell)
+{
+    const std::vector<RVec> coordinates = { { 13.132, -8.229, -2.700 } };
+    const matrix            box         = { { 6.2, 0, 0 }, { 0, 6.2, 0 }, { 0, 0, 6.2 } };
+    const real              cutoff      = 1;
+    const real referenceDensity         = (1) / (coordinates.size() * gmx::power3<real>(6.2 / 6));
 
+    const real density = computeEffectiveAtomDensity(coordinates, box, cutoff, MPI_COMM_NULL);
+    EXPECT_FLOAT_EQ(density, referenceDensity);
+}
+
+/* We want to ensure that the optimized verlet buffer sizes are the same for i/j cluster sizes
+ * larger than four. This only matters for GPU runs with the optimal pairlist and cluster sizes
+ * determined at runtime to fit the current GPU architecture.
+ * It is necessary as we want to set the optimal rlist before having the information about
+ * the devices available. This test ensures that the requirement keeps being fulfilled.
+ */
+TEST(VerletBufferSize, SizeAboveFourIsEquivalent)
+{
+    gmx_mtop_t mtop;
+    addNWaterMolecules(&mtop, c_waterPositions.size());
+    mtop.finalize();
+    const matrix box    = { { 6.2, 0, 0 }, { 0, 6.2, 0 }, { 0, 0, 6.2 } };
+    const real   cutoff = 1;
+    const real density  = computeEffectiveAtomDensity(c_waterPositions, box, cutoff, MPI_COMM_NULL);
+    const real ensembleTemperature = 298.15;
+    t_inputrec inputrec;
+    inputrec.eI                            = IntegrationAlgorithm::MD;
+    inputrec.verletbuf_tol                 = 0.005;
+    inputrec.verletBufferPressureTolerance = 0.001;
+    inputrec.vdwtype                       = VanDerWaalsType::Cut;
+    inputrec.vdw_modifier                  = InteractionModifiers::PotSwitch;
+    inputrec.rvdw                          = 1.0;
+    inputrec.rvdw_switch                   = 0.9;
+    inputrec.coulombtype                   = CoulombInteractionType::PmeSwitch;
+    inputrec.coulomb_modifier              = InteractionModifiers::PotSwitch;
+    inputrec.rcoulomb                      = 1.0;
+    inputrec.rcoulomb_switch               = 0.9;
+    inputrec.nstlist                       = 10;
+    inputrec.epsilon_r                     = 0.9;
+    inputrec.delta_t                       = 1;
+    VerletbufListSetup setupFour{ 4, 4 };
+    VerletbufListSetup setupEight{ 8, 8 };
+
+    const real resultFour = calcVerletBufferSize(mtop,
+                                                 density,
+                                                 inputrec,
+                                                 inputrec.verletBufferPressureTolerance,
+                                                 inputrec.nstlist,
+                                                 inputrec.nstlist - 1,
+                                                 ensembleTemperature,
+                                                 setupFour);
+
+    const real resultEight = calcVerletBufferSize(mtop,
+                                                  density,
+                                                  inputrec,
+                                                  inputrec.verletBufferPressureTolerance,
+                                                  inputrec.nstlist,
+                                                  inputrec.nstlist - 1,
+                                                  ensembleTemperature,
+                                                  setupEight);
+
+    EXPECT_FLOAT_EQ(resultFour, resultEight);
+}
+
+} // namespace
+} // namespace test
 } // namespace gmx

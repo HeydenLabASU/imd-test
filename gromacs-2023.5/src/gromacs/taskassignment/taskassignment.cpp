@@ -52,8 +52,12 @@
 
 #include "config.h"
 
+#include <cstddef>
+
 #include <algorithm>
 #include <exception>
+#include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -65,6 +69,7 @@
 #include "gromacs/mdtypes/commrec.h"
 #include "gromacs/mdtypes/simulation_workload.h"
 #include "gromacs/taskassignment/usergpuids.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
@@ -78,8 +83,12 @@
 #include "findallgputasks.h"
 #include "reportgpuusage.h"
 
+enum class PmeRunMode;
+struct DeviceInformation;
+
 namespace gmx
 {
+enum class TaskTarget;
 
 namespace
 {
@@ -307,10 +316,19 @@ GpuTaskAssignments GpuTaskAssignmentsBuilder::build(const gmx::ArrayRef<const in
         {
             ArrayRef<const int> compatibleGpusToUse = availableDevices;
 
-            // enforce the single device/rank restriction
-            if (numRanksOnThisNode == 1 && !compatibleGpusToUse.empty())
+            // Enforce the single device per rank restriction by ensuring
+            // that there are only at most as many devices used as ranks.
+            //
+            // This means that with a single rank with NB and PME
+            // offloaded we assign both tasks to the same GPU
+            // regardless of how many GPUs are detected. Similarly,
+            // with N combined PP-PME ranks (ie. with NB and PME
+            // offloaded and PME decomposition active) we assign both
+            // tasks on each rank to the same GPU even when more than
+            // N GPUs are detected.
+            if (numRanksOnThisNode < compatibleGpusToUse.size())
             {
-                compatibleGpusToUse = compatibleGpusToUse.subArray(0, 1);
+                compatibleGpusToUse = compatibleGpusToUse.subArray(0, numRanksOnThisNode);
             }
 
             // When doing automated assignment of GPU tasks to GPU
@@ -458,11 +476,9 @@ static bool hasPmeOrNonbondedTask(const GpuTaskMapping& mapping)
     return hasTaskType<GpuTask::Pme>(mapping) || hasTaskType<GpuTask::Nonbonded>(mapping);
 }
 
-DeviceInformation* GpuTaskAssignments::initDevice(int* deviceId) const
+DeviceInformation* GpuTaskAssignments::initDevice() const
 {
-    DeviceInformation*       deviceInfo        = nullptr;
     const GpuTaskAssignment& gpuTaskAssignment = assignmentForAllRanksOnThisNode_[indexOfThisRank_];
-
     // This works because only one task of each type per rank is
     // currently permitted and if there are multiple tasks, they must
     // use the same device.
@@ -471,11 +487,9 @@ DeviceInformation* GpuTaskAssignments::initDevice(int* deviceId) const
 
     if (gpuTaskMapping != gpuTaskAssignment.end())
     {
-        *deviceId  = gpuTaskMapping->deviceId_;
-        deviceInfo = hardwareInfo_.deviceInfoList[*deviceId].get();
-        setActiveDevice(*deviceInfo);
+        return hardwareInfo_.deviceInfoList[gpuTaskMapping->deviceId_].get();
     }
-    return deviceInfo;
+    return nullptr;
 }
 
 bool GpuTaskAssignments::thisRankHasPmeGpuTask() const

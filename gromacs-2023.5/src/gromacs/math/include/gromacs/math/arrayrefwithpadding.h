@@ -74,7 +74,7 @@ public:
     //! Type of values stored in the reference.
     using value_type = T;
     //! Type for representing size of the reference.
-    using size_type = index;
+    using size_type = Index;
     //! Const pointer to an element.
     using const_pointer = const T*;
     //! Const iterator type to an element.
@@ -170,7 +170,7 @@ public:
      * The actual memory areas are not modified, only the references are
      * swapped.
      */
-    void swap(ArrayRefWithPadding<T>& other)
+    void swap(ArrayRefWithPadding<T>& other) noexcept
     {
         std::swap(begin_, other.begin_);
         std::swap(end_, other.end_);

@@ -37,6 +37,7 @@
 
 #include "config.h"
 
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/gmxassert.h"
 
 #include "baseversion_gen.h"
@@ -70,10 +71,7 @@ void gmx_is_single_precision() {}
 const char* getGpuImplementationString()
 {
     // Some flavors of clang complain about unreachable returns.
-#ifdef __clang__
-#    pragma clang diagnostic push
-#    pragma clang diagnostic ignored "-Wunreachable-code-return"
-#endif
+    CLANG_DIAGNOSTIC_IGNORE("-Wunreachable-code-return")
     if (GMX_GPU)
     {
         if (GMX_GPU_CUDA)
@@ -84,15 +82,19 @@ const char* getGpuImplementationString()
         {
             return "OpenCL";
         }
+        else if (GMX_GPU_HIP)
+        {
+            return "HIP (not implemented yet}";
+        }
         else if (GMX_GPU_SYCL)
         {
             if (GMX_SYCL_DPCPP)
             {
-                return "SYCL (DPCPP)";
+                return "SYCL (oneAPI DPC++)";
             }
-            else if (GMX_SYCL_HIPSYCL)
+            else if (GMX_SYCL_ACPP)
             {
-                return "SYCL (hipSYCL)";
+                return "SYCL (AdaptiveCpp)";
             }
             else
             {
@@ -109,7 +111,5 @@ const char* getGpuImplementationString()
     {
         return "disabled";
     }
-#ifdef __clang__
-#    pragma clang diagnostic pop
-#endif
+    CLANG_DIAGNOSTIC_RESET
 }

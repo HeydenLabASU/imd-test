@@ -46,8 +46,10 @@
 #include "domdec_constraints.h"
 
 #include <cassert>
+#include <cstdio>
 
 #include <algorithm>
+#include <array>
 #include <memory>
 
 #include "gromacs/domdec/dlbtiming.h"
@@ -56,13 +58,17 @@
 #include "gromacs/domdec/ga2la.h"
 #include "gromacs/domdec/hashedmap.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdlib/constr.h"
 #include "gromacs/mdlib/gmx_omp_nthreads.h"
 #include "gromacs/mdtypes/atominfo.h"
 #include "gromacs/mdtypes/commrec.h"
 #include "gromacs/pbcutil/ishift.h"
+#include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/mtop_lookup.h"
+#include "gromacs/topology/topology.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
@@ -192,7 +198,7 @@ static void walk_out(int                       con,
 /*! \brief Looks up SETTLE constraints for a range of charge-groups */
 static void atoms_to_settles(gmx_domdec_t*                         dd,
                              const gmx_mtop_t&                     mtop,
-                             gmx::ArrayRef<const int64_t>          atomInfo,
+                             gmx::ArrayRef<const int32_t>          atomInfo,
                              gmx::ArrayRef<const std::vector<int>> at2settle_mt,
                              int                                   cg_start,
                              int                                   cg_end,
@@ -267,7 +273,7 @@ static void atoms_to_settles(gmx_domdec_t*                         dd,
 /*! \brief Looks up constraint for the local atoms */
 static void atoms_to_constraints(gmx_domdec_t*                         dd,
                                  const gmx_mtop_t&                     mtop,
-                                 gmx::ArrayRef<const int64_t>          atomInfo,
+                                 gmx::ArrayRef<const int>              atomInfo,
                                  gmx::ArrayRef<const ListOfLists<int>> at2con_mt,
                                  int                                   nrec,
                                  InteractionList*                      ilc_local,
@@ -368,7 +374,7 @@ static void atoms_to_constraints(gmx_domdec_t*                         dd,
 int dd_make_local_constraints(gmx_domdec_t*                  dd,
                               int                            at_start,
                               const struct gmx_mtop_t&       mtop,
-                              gmx::ArrayRef<const int64_t>   atomInfo,
+                              gmx::ArrayRef<const int32_t>   atomInfo,
                               gmx::Constraints*              constr,
                               int                            nrec,
                               gmx::ArrayRef<InteractionList> il_local)

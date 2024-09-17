@@ -45,7 +45,10 @@
 #include <cstdio>
 
 #include <algorithm>
+#include <filesystem>
+#include <memory>
 #include <set>
+#include <string>
 #include <vector>
 
 #include "gromacs/analysisdata/analysisdata.h"
@@ -56,21 +59,32 @@
 #include "gromacs/analysisdata/modules/plot.h"
 #include "gromacs/fileio/gmxfio.h"
 #include "gromacs/fileio/trxio.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/options/basicoptions.h"
 #include "gromacs/options/filenameoption.h"
 #include "gromacs/options/ioptionscontainer.h"
+#include "gromacs/options/optionfiletype.h"
+#include "gromacs/selection/indexutil.h"
 #include "gromacs/selection/selection.h"
+#include "gromacs/selection/selectionenums.h"
 #include "gromacs/selection/selectionoption.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/trajectory/trajectoryframe.h"
 #include "gromacs/trajectoryanalysis/analysissettings.h"
 #include "gromacs/trajectoryanalysis/topologyinformation.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/stringutil.h"
 
+struct t_pbc;
+
 namespace gmx
 {
+class AbstractAnalysisData;
 
 namespace analysismodules
 {
@@ -111,10 +125,10 @@ private:
 
     struct GroupInfo
     {
-        GroupInfo(const std::string& name, bool bDynamic) : name(name), bDynamic(bDynamic) {}
+        GroupInfo(const std::string& name, bool bDynamic) : name_(name), bDynamic_(bDynamic) {}
 
-        std::string name;
-        bool        bDynamic;
+        std::string name_;
+        bool        bDynamic_;
     };
 
     std::string            fnm_;
@@ -197,15 +211,15 @@ void IndexFileWriterModule::pointsAdded(const AnalysisDataPointSetRef& points)
     if (points.firstColumn() == 0)
     {
         ++currentGroup_;
-        GMX_RELEASE_ASSERT(currentGroup_ < ssize(groups_), "Too few groups initialized");
-        if (bFirstFrame || groups_[currentGroup_].bDynamic)
+        GMX_RELEASE_ASSERT(currentGroup_ < gmx::ssize(groups_), "Too few groups initialized");
+        if (bFirstFrame || groups_[currentGroup_].bDynamic_)
         {
             if (!bFirstFrame || currentGroup_ > 0)
             {
                 std::fprintf(fp_, "\n\n");
             }
-            std::string name = groups_[currentGroup_].name;
-            if (groups_[currentGroup_].bDynamic)
+            std::string name = groups_[currentGroup_].name_;
+            if (groups_[currentGroup_].bDynamic_)
             {
                 name += formatString("_f%d_t%.3f", points.frameIndex(), points.x());
             }
@@ -216,7 +230,7 @@ void IndexFileWriterModule::pointsAdded(const AnalysisDataPointSetRef& points)
     }
     else
     {
-        if (bFirstFrame || groups_[currentGroup_].bDynamic)
+        if (bFirstFrame || groups_[currentGroup_].bDynamic_)
         {
             if (currentSize_ % 15 == 0)
             {
@@ -436,7 +450,7 @@ void Select::initOptions(IOptionsContainer* options, TrajectoryAnalysisSettings*
                                .defaultBasename("index")
                                .description("Indices selected by each selection"));
     options->addOption(FileNameOption("on")
-                               .filetype(OptionFileType::Index)
+                               .filetype(OptionFileType::AtomIndex)
                                .outputFile()
                                .store(&fnNdx_)
                                .defaultBasename("index")
@@ -500,9 +514,9 @@ void Select::initAnalysis(const TrajectoryAnalysisSettings& settings, const Topo
 {
     bResInd_ = (resNumberType_ == ResidueNumbering::ByIndex);
 
-    for (SelectionList::iterator i = sel_.begin(); i != sel_.end(); ++i)
+    for (auto& i : sel_)
     {
-        i->initCoveredFraction(CFRAC_SOLIDANGLE);
+        i.initCoveredFraction(CFRAC_SOLIDANGLE);
     }
 
     // TODO: For large systems, a float may not have enough precision

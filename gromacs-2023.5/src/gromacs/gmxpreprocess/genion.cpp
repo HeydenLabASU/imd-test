@@ -37,20 +37,32 @@
 
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
+#include <algorithm>
+#include <filesystem>
+#include <iterator>
 #include <numeric>
+#include <string>
 #include <vector>
 
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/fileio/confio.h"
+#include "gromacs/fileio/filetypes.h"
+#include "gromacs/fileio/oenv.h"
+#include "gromacs/math/functions.h"
 #include "gromacs/math/units.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdlib/force.h"
 #include "gromacs/pbcutil/pbc.h"
+#include "gromacs/random/seed.h"
 #include "gromacs/random/threefry.h"
 #include "gromacs/random/uniformintdistribution.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/index.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/utility/arrayref.h"
@@ -59,7 +71,11 @@
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
+
+enum class PbcType : int;
+struct gmx_output_env_t;
 
 
 /*! \brief Return whether any atoms of two groups are below minimum distance.
@@ -535,8 +551,8 @@ int gmx_genion(int argc, char* argv[])
         /* Compute number of ions to be added */
         vol   = det(box);
         nsalt = gmx::roundToInt(conc * vol * gmx::c_avogadro / 1e24);
-        p_num = abs(nsalt * n_q);
-        n_num = abs(nsalt * p_q);
+        p_num = std::abs(nsalt * n_q);
+        n_num = std::abs(nsalt * p_q);
     }
     if (bNeutral)
     {
@@ -589,12 +605,12 @@ int gmx_genion(int argc, char* argv[])
         {
             int* index = nullptr;
             int  nwa;
-            get_index(&atoms, ftp2fn_null(efNDX, NFILE, fnm), 1, &nwa, &index, &grpname);
+            get_index(&atoms, ftp2path_optional(efNDX, NFILE, fnm), 1, &nwa, &index, &grpname);
             solventGroup.assign(index, index + nwa);
             sfree(index);
         }
 
-        for (gmx::index i = 1; i < gmx::ssize(solventGroup); i++)
+        for (gmx::Index i = 1; i < gmx::ssize(solventGroup); i++)
         {
             if (solventGroup[i] != solventGroup[i - 1] + 1)
             {

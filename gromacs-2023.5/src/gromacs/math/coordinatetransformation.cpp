@@ -40,11 +40,18 @@
 
 #include "gromacs/math/coordinatetransformation.h"
 
+#include <algorithm>
+#include <array>
+#include <memory>
 #include <vector>
 
 #include "gromacs/math/matrix.h"
+#include "gromacs/math/multidimarray.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdspan/extensions.h"
+#include "gromacs/mdspan/extents.h"
+#include "gromacs/mdspan/layouts.h"
 #include "gromacs/utility/arrayref.h"
 
 namespace gmx
@@ -205,10 +212,10 @@ TranslateAndScale& TranslateAndScale::operator=(TranslateAndScale&&) noexcept = 
  * AffineTransformation
  */
 
-AffineTransformation::AffineTransformation(Matrix3x3ConstSpan matrix, const RVec& translation) :
+AffineTransformation::AffineTransformation(Matrix3x3ConstSpan mat, const RVec& translation) :
     translation_{ translation }
 {
-    std::copy(begin(matrix), end(matrix), begin(matrix_));
+    std::copy(begin(mat), end(mat), begin(matrix_));
 }
 
 void AffineTransformation::operator()(ArrayRef<RVec> vectors) const

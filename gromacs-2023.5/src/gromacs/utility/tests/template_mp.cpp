@@ -35,9 +35,13 @@
 
 #include "gromacs/utility/template_mp.h"
 
+#include <string>
+
 #include <gtest/gtest.h>
 
 namespace gmx
+{
+namespace test
 {
 namespace
 {
@@ -98,4 +102,5 @@ TEST(TemplateMPTest, DispatchTemplatedFunctionEnumBool)
 }
 
 } // anonymous namespace
+} // namespace test
 } // namespace gmx

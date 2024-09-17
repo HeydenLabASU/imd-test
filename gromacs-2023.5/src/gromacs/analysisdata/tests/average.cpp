@@ -49,6 +49,9 @@
 
 #include "gromacs/analysisdata/modules/average.h"
 
+#include <memory>
+#include <string>
+
 #include <gtest/gtest.h>
 
 #include "gromacs/analysisdata/analysisdata.h"
@@ -58,6 +61,10 @@
 
 using gmx::test::AnalysisDataTestInput;
 
+namespace gmx
+{
+namespace test
+{
 namespace
 {
 
@@ -67,13 +74,8 @@ class SimpleInputData
 public:
     static const AnalysisDataTestInput& get()
     {
-#ifndef STATIC_ANON_NAMESPACE_BUG
         static SimpleInputData singleton;
         return singleton.data_;
-#else
-        static SimpleInputData singleton_average;
-        return singleton_average.data_;
-#endif
     }
 
     SimpleInputData() : data_(1, false)
@@ -94,13 +96,8 @@ class MultipointInputData
 public:
     static const AnalysisDataTestInput& get()
     {
-#ifndef STATIC_ANON_NAMESPACE_BUG
         static MultipointInputData singleton;
         return singleton.data_;
-#else
-        static MultipointInputData singleton_average;
-        return singleton_average.data_;
-#endif
     }
 
     MultipointInputData() : data_(1, true)
@@ -128,13 +125,8 @@ class MultiDataSetInputData
 public:
     static const AnalysisDataTestInput& get()
     {
-#ifndef STATIC_ANON_NAMESPACE_BUG
         static MultiDataSetInputData singleton;
         return singleton.data_;
-#else
-        static MultiDataSetInputData singleton_average;
-        return singleton_average.data_;
-#endif
     }
 
     MultiDataSetInputData() : data_(2, true)
@@ -301,3 +293,5 @@ TEST_F(FrameAverageModuleTest, HandlesMultipleDataSets)
 }
 
 } // namespace
+} // namespace test
+} // namespace gmx

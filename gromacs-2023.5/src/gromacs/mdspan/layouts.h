@@ -149,12 +149,11 @@ public:
          * \param[in] r current rank
          * \param[in] sum current sum up to this rank
          * \param[in] i index
-         * \oaram[in] indices The rest of the paramter pack.
+         * \oaram[in] indices The rest of the parameter pack.
          * \returns The offset.
          */
         template<class... Indices>
-        inline constexpr index_type
-        offset(const size_t r, ptrdiff_t sum, const index_type i, Indices... indices) const noexcept
+        constexpr index_type offset(const size_t r, ptrdiff_t sum, const index_type i, Indices... indices) const noexcept
         {
             return offset(r + 1, sum * m_extents.extent(r) + i, indices...);
         }

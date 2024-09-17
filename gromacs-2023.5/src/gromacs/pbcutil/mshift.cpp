@@ -35,17 +35,29 @@
 
 #include "gromacs/pbcutil/mshift.h"
 
+#include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include <algorithm>
+#include <array>
+#include <filesystem>
+#include <string>
+#include <vector>
 
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
+#include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/listoflists.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/strconvert.h"
 #include "gromacs/utility/stringutil.h"
 
@@ -272,7 +284,7 @@ static gmx_bool determine_graph_parts(const EdgesGenerator& edgesG, ArrayRef<int
     {
         haveMultipleParts = false;
         numAtomsChanged   = 0;
-        for (gmx::index at_i = 0; at_i < gmx::ssize(edgesG.edges()); at_i++)
+        for (gmx::Index at_i = 0; at_i < gmx::ssize(edgesG.edges()); at_i++)
         {
             for (const int at_i2 : edgesG.edges()[at_i])
             {
@@ -650,9 +662,9 @@ static int mk_grey(ArrayRef<egCol> edgeColor,
 /* Return the first node/atom with colour Col starting at fC.
  * return -1 if none found.
  */
-static gmx::index first_colour(const int fC, const egCol Col, const t_graph* g, ArrayRef<const egCol> edgeColor)
+static gmx::Index first_colour(const int fC, const egCol Col, const t_graph* g, ArrayRef<const egCol> edgeColor)
 {
-    for (gmx::index i = fC; i < gmx::ssize(g->edges); i++)
+    for (gmx::Index i = fC; i < gmx::ssize(g->edges); i++)
     {
         if (!g->edges[i].empty() && edgeColor[i] == Col)
         {

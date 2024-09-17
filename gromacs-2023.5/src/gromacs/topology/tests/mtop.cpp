@@ -40,12 +40,24 @@
  */
 #include "gmxpre.h"
 
+#include <array>
+#include <initializer_list>
+#include <memory>
+#include <string>
+#include <vector>
+
 #include <gtest/gtest.h>
 
+#include "gromacs/topology/atoms.h"
+#include "gromacs/topology/forcefieldparameters.h"
+#include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/mtop_atomloops.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/range.h"
+#include "gromacs/utility/smalloc.h"
 
 #include "testutils/topologyhelpers.h"
 
@@ -131,13 +143,13 @@ TEST(MtopTest, Operators)
     AtomIterator it(mtop);
     AtomIterator otherIt(mtop);
     EXPECT_EQ((*it).globalAtomNumber(), 0);
-    // EXPECT_EQ(it->globalAtomNumber(), 0); // Known to be broken with Boost 1.83; see #4893, #4909
+    EXPECT_EQ(it->globalAtomNumber(), 0);
     EXPECT_TRUE(it == otherIt);
     EXPECT_FALSE(it != otherIt);
     ++it;
-    EXPECT_EQ((*it).globalAtomNumber(), 1);
+    EXPECT_EQ(it->globalAtomNumber(), 1);
     it++;
-    EXPECT_EQ((*it).globalAtomNumber(), 2);
+    EXPECT_EQ(it->globalAtomNumber(), 2);
     EXPECT_TRUE(it != otherIt);
     EXPECT_FALSE(it == otherIt);
     done_atom(&mtop.moltype[0].atoms);
@@ -151,7 +163,7 @@ TEST(MtopTest, CanFindResidueStartAndEndAtoms)
 
     auto atomRanges = atomRangeOfEachResidue(mtop.moltype[0]);
     ASSERT_EQ(atomRanges.size(), expectedResidueRange.size());
-    for (gmx::index i = 0; i < gmx::ssize(atomRanges); i++)
+    for (gmx::Index i = 0; i < gmx::ssize(atomRanges); i++)
     {
         EXPECT_EQ(atomRanges[i].begin(), expectedResidueRange[i].begin());
         EXPECT_EQ(atomRanges[i].end(), expectedResidueRange[i].end());

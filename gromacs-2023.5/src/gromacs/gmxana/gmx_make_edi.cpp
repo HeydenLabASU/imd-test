@@ -39,24 +39,37 @@
 
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
+#include <filesystem>
+#include <string>
+
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/fileio/confio.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/pdbio.h"
 #include "gromacs/fileio/xvgr.h"
 #include "gromacs/gmxana/eigio.h"
 #include "gromacs/gmxana/gmx_ana.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/index.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
+
+enum class PbcType : int;
+struct gmx_output_env_t;
 
 typedef struct
 {
@@ -298,14 +311,14 @@ static int sscan_list(int* list[], const char* str, const char* listname)
                 }
                 break;
 
-            /* format error occured */
+            /* format error occurred */
             case sError:
                 gmx_fatal(FARGS,
                           "Error in the list of eigenvectors for %s at pos %td with char %c",
                           listname,
                           pos - startpos,
                           *(pos - 1));
-            /* logical error occured */
+            /* logical error occurred */
             case sZero:
                 gmx_fatal(FARGS,
                           "Error in the list of eigenvectors for %s at pos %td: eigenvector 0 is "

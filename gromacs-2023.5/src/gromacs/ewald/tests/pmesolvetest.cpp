@@ -42,11 +42,32 @@
 
 #include "gmxpre.h"
 
+#include <cmath>
+#include <cstdint>
+
+#include <algorithm>
+#include <map>
+#include <optional>
 #include <string>
+#include <tuple>
+#include <vector>
 
 #include <gmock/gmock.h>
+#include <gtest/gtest.h>
 
+#include "gromacs/ewald/pme.h"
+#include "gromacs/ewald/pme_gpu_internal.h"
+#include "gromacs/ewald/pme_output.h"
+#include "gromacs/math/gmxcomplex.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdtypes/inputrec.h"
+#include "gromacs/mdtypes/md_enums.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/enumerationhelpers.h"
+#include "gromacs/utility/exceptions.h"
+#include "gromacs/utility/message_string_collector.h"
+#include "gromacs/utility/range.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/stringutil.h"
 
 #include "testutils/refdata.h"
@@ -254,8 +275,9 @@ public:
             default: GMX_THROW(InternalError("Unknown PME solver"));
         }
 
-        const PmeTestHardwareContext& pmeTestHardwareContext = getPmeTestHardwareContexts()[contextIndex];
-        CodePath                      codePath               = pmeTestHardwareContext.codePath();
+        const auto                    pmeTestHardwareContextsAll = getPmeTestHardwareContexts();
+        const PmeTestHardwareContext& pmeTestHardwareContext = pmeTestHardwareContextsAll[contextIndex];
+        const CodePath                codePath               = pmeTestHardwareContext.codePath();
         MessageStringCollector        messages = getSkipMessagesIfNecessary(inputRec, codePath);
         messages.appendIf(!pmeTestHardwareContext.gpuId().has_value() && gridOrdering == GridOrdering::XYZ,
                           "CPU PME solve does not implement XYZ grid ordering");
@@ -331,11 +353,11 @@ public:
         {
             // we want an additional safeguard for denormal numbers as they cause an exception in string conversion;
             // however, using GMX_REAL_MIN causes an "unused item warning" for single precision builds
-            if (fabs(point.second.re) >= GMX_FLOAT_MIN)
+            if (std::fabs(point.second.re) >= GMX_FLOAT_MIN)
             {
                 gridValuesChecker.checkReal(point.second.re, (point.first + " re").c_str());
             }
-            if (fabs(point.second.im) >= GMX_FLOAT_MIN)
+            if (std::fabs(point.second.im) >= GMX_FLOAT_MIN)
             {
                 gridValuesChecker.checkReal(point.second.im, (point.first + " im").c_str());
             }

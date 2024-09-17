@@ -35,13 +35,22 @@
 #include "gmxpre.h"
 
 #include <cmath>
+#include <cstdio>
 
+#include <string>
+
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/gmxana/gmx_ana.h"
 #include "gromacs/gmxana/sfactor.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/pleasecite.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
+
+struct gmx_output_env_t;
 
 int gmx_saxs(int argc, char* argv[])
 {
@@ -68,11 +77,16 @@ int gmx_saxs(int argc, char* argv[])
         { efXVG, "-sq", "sq", ffWRITE },
     };
 #define NFILE asize(fnm)
+
     if (!parse_common_args(
                 &argc, argv, PCA_CAN_TIME, NFILE, fnm, NPA, pa, asize(desc), desc, 0, nullptr, &oenv))
     {
         return 0;
     }
+
+    std::fprintf(stdout,
+                 "You are going to use a deprecated gmx tool. Please migrate to the new one, gmx "
+                 "scattering");
 
     fnTPS = ftp2fn(efTPS, NFILE, fnm);
     fnTRX = ftp2fn(efTRX, NFILE, fnm);

@@ -46,8 +46,12 @@
 #include "domdec_specatomcomm.h"
 
 #include <cassert>
+#include <cstdio>
 
 #include <algorithm>
+#include <array>
+#include <filesystem>
+#include <memory>
 
 #include "gromacs/domdec/dlb.h"
 #include "gromacs/domdec/domdec.h"
@@ -59,6 +63,7 @@
 #include "gromacs/math/vec.h"
 #include "gromacs/mdtypes/commrec.h"
 #include "gromacs/pbcutil/ishift.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
 
@@ -551,11 +556,11 @@ int setup_specat_communication(gmx_domdec_t*             dd,
             ns += spac->spas[d][1].a.size();
             nr += spac->spas[d][1].nrecv;
         }
-        if (vbuf_fac * ns > gmx::index(spac->vbuf.size()))
+        if (vbuf_fac * ns > gmx::Index(spac->vbuf.size()))
         {
             spac->vbuf.resize(vbuf_fac * ns);
         }
-        if (vbuf_fac == 2 && vbuf_fac * nr > gmx::index(spac->vbuf2.size()))
+        if (vbuf_fac == 2 && vbuf_fac * nr > gmx::Index(spac->vbuf2.size()))
         {
             spac->vbuf2.resize(vbuf_fac * nr);
         }

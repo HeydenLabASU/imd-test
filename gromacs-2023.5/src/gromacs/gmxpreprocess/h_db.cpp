@@ -41,13 +41,16 @@
 #include <cstring>
 
 #include <algorithm>
+#include <array>
 #include <string>
 #include <vector>
 
 #include "gromacs/gmxpreprocess/fflibutil.h"
 #include "gromacs/gmxpreprocess/notset.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/topology/atoms.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
@@ -87,7 +90,7 @@ void read_ab(char* line, const std::filesystem::path& fn, MoleculePatch* hack)
     ns = sscanf(line, "%d%d%s%s%s%s%s", &nh, &tp, hn, a[0], a[1], a[2], a[3]);
     if (ns < 4)
     {
-        gmx_fatal(FARGS, "wrong format in input file %s on line\n%s\n", fn.u8string().c_str(), line);
+        gmx_fatal(FARGS, "wrong format in input file %s on line\n%s\n", fn.string().c_str(), line);
     }
 
     hack->nr = nh;
@@ -96,7 +99,7 @@ void read_ab(char* line, const std::filesystem::path& fn, MoleculePatch* hack)
     {
         gmx_fatal(FARGS,
                   "Error in hdb file %s:\nH-type should be in 1-%d. Offending line:\n%s",
-                  fn.u8string().c_str(),
+                  fn.string().c_str(),
                   maxcontrol - 1,
                   line);
     }
@@ -107,7 +110,7 @@ void read_ab(char* line, const std::filesystem::path& fn, MoleculePatch* hack)
         gmx_fatal(FARGS,
                   "Error in hdb file %s:\nWrong number of control atoms (%d instead of %d) on "
                   "line:\n%s\n",
-                  fn.u8string().c_str(),
+                  fn.string().c_str(),
                   hack->nctl,
                   ncontrol[hack->tp],
                   line);
@@ -154,11 +157,11 @@ static void read_h_db_file(const std::filesystem::path& hfn, std::vector<Molecul
             fprintf(stderr, "Error in hdb file: nah = %d\nline = '%s'\n", size, line);
             break;
         }
-        globalPatches->emplace_back(MoleculePatchDatabase());
+        globalPatches->emplace_back();
         MoleculePatchDatabase* block = &globalPatches->back();
         clearModificationBlock(block);
         block->name     = buf;
-        block->filebase = filebase.u8string();
+        block->filebase = filebase.string();
 
         int nab;
         if (sscanf(line + n, "%d", &nab) == 1)
@@ -173,13 +176,13 @@ static void read_h_db_file(const std::filesystem::path& hfn, std::vector<Molecul
                               nab,
                               i - 1,
                               block->name.c_str(),
-                              hfn.u8string().c_str());
+                              hfn.string().c_str());
                 }
                 if (nullptr == fgets(buf, STRLEN, in))
                 {
-                    gmx_fatal(FARGS, "Error reading from file %s", hfn.u8string().c_str());
+                    gmx_fatal(FARGS, "Error reading from file %s", hfn.string().c_str());
                 }
-                block->hack.emplace_back(MoleculePatch());
+                block->hack.emplace_back();
                 read_ab(buf, hfn, &block->hack.back());
             }
         }

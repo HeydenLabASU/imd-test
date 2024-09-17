@@ -42,16 +42,23 @@
 
 #include "gromacs/utility/range.h"
 
+#include <cstddef>
+
+#include <algorithm>
 #include <limits>
+#include <string>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include "gromacs/utility/basedefinitions.h"
 
 #include "testutils/testasserts.h"
 
 namespace gmx
 {
-
+namespace test
+{
 namespace
 {
 
@@ -94,7 +101,7 @@ TEST(Range, IsInRangeWorks)
 
 TEST(Range, IteratorWorks)
 {
-    const Range<index> range(-1, 3);
+    const Range<Index> range(-1, 3);
 
     int minValue = std::numeric_limits<int>::max();
     int maxValue = std::numeric_limits<int>::min();
@@ -108,5 +115,5 @@ TEST(Range, IteratorWorks)
 }
 
 } // namespace
-
+} // namespace test
 } // namespace gmx

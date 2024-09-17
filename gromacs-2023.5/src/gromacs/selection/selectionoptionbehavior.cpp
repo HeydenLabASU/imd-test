@@ -44,19 +44,27 @@
 
 #include <cstdio>
 
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "gromacs/options/filenameoption.h"
 #include "gromacs/options/ioptionscontainer.h"
+#include "gromacs/options/optionfiletype.h"
 #include "gromacs/options/options.h"
 #include "gromacs/selection/indexutil.h"
 #include "gromacs/selection/selectioncollection.h"
+#include "gromacs/selection/selectionenums.h"
 #include "gromacs/selection/selectionfileoption.h"
 #include "gromacs/selection/selectionoptionmanager.h"
 #include "gromacs/topology/atoms.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/filestream.h"
+#include "gromacs/utility/gmxassert.h"
+
+struct gmx_ana_indexgrps_t;
 
 namespace gmx
 {
@@ -130,7 +138,7 @@ public:
 
     void compileSelections()
     {
-        const bool  topRequired = selections_.requiredTopologyProperties().needsTopology;
+        const bool  topRequired = selections_.requiredTopologyProperties().needsTopology_;
         gmx_mtop_t* top         = topologyProvider_.getTopology(topRequired);
         int         natoms      = -1;
         if (top == nullptr)
@@ -146,7 +154,7 @@ public:
 
     void getMassesIfRequired(gmx_mtop_t* top) const
     {
-        const bool massRequired = selections_.requiredTopologyProperties().needsMasses;
+        const bool massRequired = selections_.requiredTopologyProperties().needsMasses_;
         if (!massRequired)
         {
             return;
@@ -189,7 +197,7 @@ SelectionOptionBehavior::~SelectionOptionBehavior() {}
 void SelectionOptionBehavior::initOptions(IOptionsContainer* options)
 {
     options->addOption(FileNameOption("n")
-                               .filetype(OptionFileType::Index)
+                               .filetype(OptionFileType::AtomIndex)
                                .inputFile()
                                .store(&impl_->ndxfile_)
                                .defaultBasename("index")

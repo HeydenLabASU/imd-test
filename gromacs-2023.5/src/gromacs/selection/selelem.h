@@ -48,6 +48,8 @@
 #ifndef GMX_SELECTION_SELELEM_H
 #define GMX_SELECTION_SELELEM_H
 
+#include <cstdio>
+
 #include <memory>
 #include <string>
 
@@ -65,6 +67,7 @@ struct gmx_sel_evaluate_t;
 struct gmx_sel_mempool_t;
 
 struct t_compiler_data;
+struct gmx_ana_indexgrps_t;
 
 namespace gmx
 {
@@ -279,17 +282,17 @@ public:
     /*! \brief
      * Allocates memory and performs common initialization.
      *
-     * \param[in] type     Type of selection element to create.
+     * \param[in] elemType     Type of selection element to create.
      * \param[in] location Location of the element.
      *
-     * \a type is set to \p type,
+     * \a type is set to \p elemType,
      * \a v::type is set to \ref GROUP_VALUE for boolean and comparison
      * expressions and \ref NO_VALUE for others, and
      * \ref SEL_ALLOCVAL is set for non-root elements (\ref SEL_ALLOCDATA
      * is also set for \ref SEL_BOOLEAN elements).
      * All the pointers are set to NULL.
      */
-    SelectionTreeElement(e_selelem_t type, const SelectionLocation& location);
+    SelectionTreeElement(e_selelem_t elemType, const SelectionLocation& location);
     ~SelectionTreeElement();
 
     //! Frees the memory allocated for the \a v union.
@@ -451,13 +454,7 @@ public:
         //! Operation type for \ref SEL_BOOLEAN elements.
         e_boolean_t boolt;
         //! Operation type for \ref SEL_ARITHMETIC elements.
-        struct
-        {
-            //! Operation type.
-            e_arithmetic_t type;
-            //! String representation.
-            char* opstr;
-        } arith;
+        e_arithmetic_t type;
         //! Associated selection parameter for \ref SEL_SUBEXPRREF elements.
         struct gmx_ana_selparam_t* param;
         //! The string/number used to reference the group.

@@ -35,10 +35,12 @@
 
 #include "readinp.h"
 
+#include <cinttypes>
 #include <cstdlib>
 #include <cstring>
 
 #include <algorithm>
+#include <string_view>
 
 #include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/binaryinformation.h"
@@ -46,6 +48,8 @@
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/keyvaluetree.h"
 #include "gromacs/utility/keyvaluetreebuilder.h"
 #include "gromacs/utility/niceheader.h"
 #include "gromacs/utility/programcontext.h"
@@ -62,7 +66,7 @@ std::vector<t_inpfile> read_inpfile(gmx::TextInputStream*        stream,
 
     if (debug)
     {
-        fprintf(debug, "Reading MDP file %s\n", fn.u8string().c_str());
+        fprintf(debug, "Reading MDP file %s\n", fn.string().c_str());
     }
 
     int             indexOfLineReadFromFile = 0;
@@ -205,7 +209,7 @@ void write_inpfile(gmx::TextOutputStream*       stream,
     gmx::TextWriter writer(stream);
     if (writeHeader == WriteMdpHeader::yes)
     {
-        gmx::niceHeader(&writer, fn.u8string().c_str(), ';');
+        gmx::niceHeader(&writer, fn.string().c_str(), ';');
 
         gmx::BinaryInformationSettings settings;
         settings.generatedByHeader(true);
@@ -283,7 +287,7 @@ int search_einp(gmx::ArrayRef<const t_inpfile> inp, const char* name)
     {
         return -1;
     }
-    for (gmx::index i = 0; i < inp.ssize(); i++)
+    for (gmx::Index i = 0; i < inp.ssize(); i++)
     {
         if (gmx_strcasecmp_min(name, inp[i].name_.c_str()) == 0)
         {

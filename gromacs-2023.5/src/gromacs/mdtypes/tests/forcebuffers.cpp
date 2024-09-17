@@ -43,13 +43,24 @@
 #include "gromacs/mdtypes/forcebuffers.h"
 
 #include <array>
+#include <string>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "gromacs/gpu_utils/hostallocator.h"
+#include "gromacs/math/arrayrefwithpadding.h"
+#include "gromacs/math/vectypes.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
+
 #include "testutils/testasserts.h"
 
 namespace gmx
+{
+namespace test
+{
+namespace
 {
 
 const std::array<RVec, 2> c_forces = { { { 0.5, 0.1, 1.2 }, { -2.1, 0.2, 0.3 } } };
@@ -100,7 +111,7 @@ TEST(ForceBuffers, CopyWorks)
 
     forceBuffers.resize(2);
     auto  force = forceBuffers.view().force();
-    index i     = 0;
+    Index i     = 0;
     for (RVec& v : force)
     {
         v = c_forces[i];
@@ -111,7 +122,7 @@ TEST(ForceBuffers, CopyWorks)
     forceBuffersCopy = forceBuffers;
     auto forceCopy   = forceBuffersCopy.view().force();
     EXPECT_EQ(forceBuffersCopy.view().force().size(), 2);
-    for (index i = 0; i < ssize(forceCopy); i++)
+    for (Index i = 0; i < ssize(forceCopy); i++)
     {
         for (int d = 0; d < DIM; d++)
         {
@@ -129,4 +140,6 @@ TEST(ForceBuffers, CopyDoesNotPin)
     EXPECT_EQ(forceBuffersCopy.pinningPolicy(), PinningPolicy::CannotBePinned);
 }
 
+} // namespace
+} // namespace test
 } // namespace gmx

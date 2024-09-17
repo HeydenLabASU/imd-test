@@ -51,6 +51,8 @@
 #include "gromacs/options/options.h"
 #include "gromacs/options/optionsection.h"
 #include "gromacs/options/repeatingsection.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/inmemoryserializer.h"
 #include "gromacs/utility/keyvaluetree.h"
@@ -63,6 +65,10 @@
 #include "testutils/refdata.h"
 #include "testutils/testasserts.h"
 
+namespace gmx
+{
+namespace test
+{
 namespace
 {
 
@@ -418,3 +424,5 @@ TEST_F(TreeValueSupportTest, SupportsEnumOption)
 }
 
 } // namespace
+} // namespace test
+} // namespace gmx

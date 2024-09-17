@@ -62,6 +62,8 @@
 #ifndef GMX_IMD_IMD_H
 #define GMX_IMD_IMD_H
 
+#include <cstdint>
+
 #include <memory>
 
 #include "gromacs/math/vectypes.h"
@@ -183,7 +185,13 @@ public:
      *
      * \returns            Whether or not we have to do IMD communication at this step.
      */
-    bool run(int64_t step, bool bNS, const matrix box, gmx::ArrayRef<const gmx::RVec> coords, double t);
+    bool run(int64_t                        step,
+             bool                           bNS,
+             const matrix                   box,
+             gmx::ArrayRef<const gmx::RVec> coords,
+             gmx::ArrayRef<const gmx::RVec> vels,
+             gmx::ArrayRef<const gmx::RVec> forces,
+             double                         t);
 
     /*! \brief Add external forces from a running interactive molecular dynamics session.
      *

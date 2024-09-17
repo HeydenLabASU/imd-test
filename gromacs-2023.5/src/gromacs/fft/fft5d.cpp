@@ -48,12 +48,12 @@
 
 #include "gromacs/gpu_utils/gpu_utils.h"
 #include "gromacs/gpu_utils/hostallocator.h"
-#include "gromacs/gpu_utils/pmalloc.h"
 #include "gromacs/utility/alignedallocator.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/gmxmpi.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 
 #ifdef NOGMX
@@ -135,6 +135,8 @@ static int vmax(const int* a, int s)
     }
     return max;
 }
+
+static constexpr bool allocatePmeGpuMixedMode = (GMX_GPU && !GMX_GPU_OPENCL);
 
 
 /* NxMxK the size of the data
@@ -282,9 +284,9 @@ fft5d_plan fft5d_plan_3d(int                NG,
     {
 #define EVENDIST
 #ifndef EVENDIST
-        oN0[i] = i * ceil((double)NG / P[0]);
-        oM0[i] = i * ceil((double)MG / P[0]);
-        oK0[i] = i * ceil((double)KG / P[0]);
+        oN0[i] = i * std::ceil((double)NG / P[0]);
+        oM0[i] = i * std::ceil((double)MG / P[0]);
+        oK0[i] = i * std::ceil((double)KG / P[0]);
 #else
         oN0[i] = (NG * i) / P[0];
         oM0[i] = (MG * i) / P[0];
@@ -294,9 +296,9 @@ fft5d_plan fft5d_plan_3d(int                NG,
     for (i = 0; i < P[1]; i++)
     {
 #ifndef EVENDIST
-        oN1[i] = i * ceil((double)NG / P[1]);
-        oM1[i] = i * ceil((double)MG / P[1]);
-        oK1[i] = i * ceil((double)KG / P[1]);
+        oN1[i] = i * std::ceil((double)NG / P[1]);
+        oM1[i] = i * std::ceil((double)MG / P[1]);
+        oK1[i] = i * std::ceil((double)KG / P[1]);
 #else
         oN1[i] = (NG * i) / P[1];
         oM1[i] = (MG * i) / P[1];
@@ -425,11 +427,11 @@ fft5d_plan fft5d_plan_3d(int                NG,
     if (!(flags & FFT5D_NOMALLOC))
     {
         // only needed for PME GPU mixed mode
-        if ((GMX_GPU_CUDA || GMX_GPU_SYCL)
-            && realGridAllocationPinningPolicy == gmx::PinningPolicy::PinnedIfSupported)
+        if (allocatePmeGpuMixedMode && realGridAllocationPinningPolicy == gmx::PinningPolicy::PinnedIfSupported)
         {
-            const std::size_t numBytes = lsize * sizeof(t_complex);
-            pmalloc(reinterpret_cast<void**>(&lin), numBytes);
+            gmx::HostAllocationPolicy policy(realGridAllocationPinningPolicy);
+            const std::size_t         numBytes = lsize * sizeof(t_complex);
+            lin = reinterpret_cast<t_complex*>(policy.malloc(numBytes));
         }
         else
         {
@@ -1197,7 +1199,7 @@ void fft5d_execute(fft5d_plan plan, int thread, fft5d_time times)
 #endif
         if ((plan->flags & FFT5D_DEBUG) && thread == 0)
         {
-            print_localdata(lout, "%d %d: FFT %d\n", s, plan);
+            print_localdata(lout, "%d %d: FFT\n", s, plan);
         }
         /* ---------- END FFT ------------ */
 
@@ -1366,11 +1368,10 @@ void fft5d_execute(fft5d_plan plan, int thread, fft5d_time times)
 #endif
         if ((plan->flags & FFT5D_DEBUG) && thread == 0)
         {
-            print_localdata(lin, "%d %d: tranposed %d\n", s + 1, plan);
+            print_localdata(lin, "%d %d: transposed\n", s + 1, plan);
         }
         /* ---------- END JOIN ------------ */
 
-        /*if (debug) print_localdata(lin, "%d %d: transposed x-z\n", N1, M0, K, ZYX, coor);*/
     } /* for(s=0;s<2;s++) */
 #ifdef NOGMX
     if (times != NULL && thread == 0)
@@ -1466,14 +1467,15 @@ void fft5d_destroy(fft5d_plan plan)
     if (!(plan->flags & FFT5D_NOMALLOC))
     {
         // only needed for PME GPU mixed mode
-        if ((GMX_GPU_CUDA || GMX_GPU_SYCL) && plan->pinningPolicy == gmx::PinningPolicy::PinnedIfSupported)
+        if (allocatePmeGpuMixedMode && plan->pinningPolicy == gmx::PinningPolicy::PinnedIfSupported)
         {
             /* We need DeviceContext to properly check pinning with SYCL. We can work around that,
              * but for an assert it's not overly important.
              */
             GMX_ASSERT(GMX_GPU_SYCL || isHostMemoryPinned(plan->lin),
                        "Memory should have been pinned");
-            pfree(plan->lin);
+            gmx::HostAllocationPolicy policy(plan->pinningPolicy);
+            policy.free(plan->lin);
         }
         else
         {

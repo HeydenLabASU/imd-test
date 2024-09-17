@@ -45,25 +45,30 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 
 #include <algorithm>
+#include <filesystem>
 
 #include "gromacs/math/arrayrefwithpadding.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/math/invertmatrix.h"
 #include "gromacs/math/vec.h"
 #include "gromacs/mdlib/constr.h"
+#include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/pbcutil/ishift.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/pbcutil/pbc_simd.h"
 #include "gromacs/simd/simd.h"
 #include "gromacs/simd/simd_math.h"
+#include "gromacs/topology/forcefieldparameters.h"
 #include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/mtop_atomloops.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
 
@@ -224,7 +229,7 @@ void SettleData::setConstraints(const InteractionList&    il_settle,
                                                        parametersAllMasses1_.dHH);
         }
 
-        const int paddedSize = ((nsettle + pack_size - 1) / pack_size) * pack_size;
+        const int paddedSize = divideRoundUp(nsettle, pack_size) * pack_size;
         ow1_.resize(paddedSize);
         hw2_.resize(paddedSize);
         hw3_.resize(paddedSize);
@@ -711,10 +716,10 @@ static void settleTemplateWrapper(const SettleData& settled,
                                   bool*             bErrorHasOccurred)
 {
     /* We need to assign settles to threads in groups of pack_size */
-    int numSettlePacks = (settled.numSettles() + packSize - 1) / packSize;
+    int numSettlePacks = divideRoundUp(settled.numSettles(), packSize);
     /* Round the end value up to give thread 0 more work */
-    int settleStart = ((numSettlePacks * thread + nthread - 1) / nthread) * packSize;
-    int settleEnd   = ((numSettlePacks * (thread + 1) + nthread - 1) / nthread) * packSize;
+    int settleStart = divideRoundUp(numSettlePacks * thread, nthread) * packSize;
+    int settleEnd   = divideRoundUp(numSettlePacks * (thread + 1), nthread) * packSize;
 
     if (v != nullptr)
     {

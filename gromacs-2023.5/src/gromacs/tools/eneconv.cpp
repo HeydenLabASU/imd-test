@@ -36,13 +36,20 @@
 #include "eneconv.h"
 
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include <algorithm>
+#include <filesystem>
+#include <string>
+#include <vector>
 
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/fileio/enxio.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/trxio.h"
 #include "gromacs/listed_forces/disre.h"
 #include "gromacs/math/functions.h"
@@ -51,11 +58,15 @@
 #include "gromacs/trajectory/energyframe.h"
 #include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/int64_to_int.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/strconvert.h"
+
+struct gmx_output_env_t;
 
 #define TIME_EXPLICIT 0
 #define TIME_CONTINUE 1
@@ -120,10 +131,10 @@ static int* select_it(int nre, gmx_enxnm_t* nm, int* nset)
 
 static void sort_files(gmx::ArrayRef<std::string> files, real* settime)
 {
-    for (gmx::index i = 0; i < files.ssize(); i++)
+    for (gmx::Index i = 0; i < files.ssize(); i++)
     {
-        gmx::index minidx = i;
-        for (gmx::index j = i + 1; j < files.ssize(); j++)
+        gmx::Index minidx = i;
+        for (gmx::Index j = i + 1; j < files.ssize(); j++)
         {
             if (settime[j] < settime[minidx])
             {
@@ -251,7 +262,7 @@ static void edit_files(gmx::ArrayRef<std::string> files,
                 "          File             Current start       New start\n"
                 "---------------------------------------------------------\n");
 
-        for (gmx::index i = 0; i < files.ssize(); i++)
+        for (gmx::Index i = 0; i < files.ssize(); i++)
         {
             fprintf(stderr, "%25s   %10.3f             ", files[i].c_str(), readtime[i]);
             ok = FALSE;
@@ -300,7 +311,7 @@ static void edit_files(gmx::ArrayRef<std::string> files,
     }
     else
     {
-        for (gmx::index i = 0; i < files.ssize(); i++)
+        for (gmx::Index i = 0; i < files.ssize(); i++)
         {
             settime[i] = readtime[i];
         }
@@ -321,7 +332,7 @@ static void edit_files(gmx::ArrayRef<std::string> files,
             "\nSummary of files and start times used:\n\n"
             "          File                Start time\n"
             "-----------------------------------------\n");
-    for (gmx::index i = 0; i < files.ssize(); i++)
+    for (gmx::Index i = 0; i < files.ssize(); i++)
     {
         switch (cont_type[i])
         {

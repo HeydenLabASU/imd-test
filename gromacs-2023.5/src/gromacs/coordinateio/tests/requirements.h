@@ -46,13 +46,21 @@
 
 #include "gmxpre.h"
 
+#include <string>
+#include <vector>
+
 #include <gtest/gtest.h>
 
 #include "gromacs/coordinateio/requirements.h"
 #include "gromacs/coordinateio/tests/coordinate_test.h"
 #include "gromacs/options/options.h"
+#include "gromacs/options/optionsassigner.h"
 #include "gromacs/utility/any.h"
+#include "gromacs/utility/exceptions.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/stringutil.h"
+
+#include "testutils/cmdlinetest.h"
 
 namespace gmx
 {
@@ -140,7 +148,7 @@ public:
         assigner.finish();
     }
 
-    //! Storage of requirments.
+    //! Storage of requirements.
     OutputRequirementOptionDirector requirementsBuilder_;
     //! Options storage
     Options options_;

@@ -47,23 +47,31 @@
 
 #include <cstdio>
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
 #include "gromacs/domdec/domdec_constraints.h"
 #include "gromacs/domdec/domdec_internal.h"
+#include "gromacs/domdec/domdec_struct.h"
 #include "gromacs/domdec/domdec_vsite.h"
 #include "gromacs/domdec/options.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdlib/gmx_omp_nthreads.h"
 #include "gromacs/mdlib/vsite.h"
 #include "gromacs/mdtypes/inputrec.h"
+#include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/topology/atoms.h"
+#include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/topology/topology_enums.h"
 #include "gromacs/topology/topsort.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/gmxassert.h"
 
 using gmx::ArrayRef;
 using gmx::DDBondedChecking;
@@ -122,10 +130,10 @@ bool dd_check_ftype(const int ftype, const ReverseTopOptions& rtOptions)
 {
     return ((((interaction_function[ftype].flags & IF_BOND) != 0U)
              && ((interaction_function[ftype].flags & IF_VSITE) == 0U)
-             && ((rtOptions.ddBondedChecking == DDBondedChecking::All)
+             && ((rtOptions.ddBondedChecking_ == DDBondedChecking::All)
                  || ((interaction_function[ftype].flags & IF_LIMZERO) == 0U)))
-            || (rtOptions.includeConstraints && (ftype == F_CONSTR || ftype == F_CONSTRNC))
-            || (rtOptions.includeSettles && ftype == F_SETTLE));
+            || (rtOptions.includeConstraints_ && (ftype == F_CONSTR || ftype == F_CONSTRNC))
+            || (rtOptions.includeSettles_ && ftype == F_SETTLE));
 }
 
 MolecularTopologyAtomIndices globalAtomIndexToMoltypeIndices(const gmx::ArrayRef<const MolblockIndices> molblockIndices,
@@ -169,7 +177,7 @@ MolecularTopologyAtomIndices globalAtomIndexToMoltypeIndices(const gmx::ArrayRef
 static int getMaxNumExclusionsPerAtom(const ListOfLists<int>& excls)
 {
     int maxNumExcls = 0;
-    for (gmx::index at = 0; at < excls.ssize(); at++)
+    for (gmx::Index at = 0; at < excls.ssize(); at++)
     {
         const auto list     = excls[at];
         const int  numExcls = list.ssize();
@@ -193,8 +201,8 @@ static void low_make_reverse_ilist(const InteractionLists&  il_mt,
                                    const AtomLinkRule       atomLinkRule,
                                    const bool               assignReverseIlist)
 {
-    const bool includeConstraints = rtOptions.includeConstraints;
-    const bool includeSettles     = rtOptions.includeSettles;
+    const bool includeConstraints = rtOptions.includeConstraints_;
+    const bool includeSettles     = rtOptions.includeSettles_;
 
     for (int ftype = 0; ftype < F_NRE; ftype++)
     {

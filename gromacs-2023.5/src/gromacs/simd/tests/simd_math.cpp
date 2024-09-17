@@ -39,15 +39,28 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 
+#include <algorithm>
+#include <iomanip>
+#include <limits>
 #include <map>
+#include <ostream>
+#include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
+
+#include <gtest/gtest.h>
 
 #include "gromacs/math/units.h"
 #include "gromacs/math/utilities.h"
 #include "gromacs/options/basicoptions.h"
 #include "gromacs/simd/simd.h"
+#include "gromacs/simd/tests/data.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 
 #include "testutils/refdata.h"
 #include "testutils/testasserts.h"
@@ -353,7 +366,7 @@ std::vector<real> SimdMathTest::generateTestPoints(Range inputRange, std::size_t
                  */
                 conv0.r = vref[i];
                 conv1.r = vtst[i];
-                ulpDiff = llabs(conv0.i - conv1.i);
+                ulpDiff = std::llabs(conv0.i - conv1.i);
                 if (ulpDiff > maxUlpDiff)
                 {
                     maxUlpDiff        = ulpDiff;

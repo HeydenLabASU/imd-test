@@ -43,6 +43,9 @@
 #include <cassert>
 #include <cstdlib>
 
+#include <cub/device/device_scan.cuh>
+
+#include "gromacs/nbnxm/gpu_types_common.h"
 #include "gromacs/nbnxm/nbnxm_gpu.h"
 
 #if defined(_MSVC)
@@ -53,7 +56,7 @@
 #include "gromacs/gpu_utils/devicebuffer.h"
 #include "gromacs/gpu_utils/gpu_utils.h"
 #include "gromacs/gpu_utils/gpueventsynchronizer.h"
-#include "gromacs/gpu_utils/typecasts.cuh"
+#include "gromacs/gpu_utils/typecasts_cuda_hip.h"
 #include "gromacs/gpu_utils/vectype_ops.cuh"
 #include "gromacs/hardware/device_information.h"
 #include "gromacs/mdtypes/simulation_workload.h"
@@ -63,15 +66,18 @@
 #include "gromacs/nbnxm/gpu_data_mgmt.h"
 #include "gromacs/nbnxm/grid.h"
 #include "gromacs/nbnxm/nbnxm.h"
+#include "gromacs/nbnxm/nbnxm_gpu_data_mgmt.h"
 #include "gromacs/nbnxm/pairlist.h"
 #include "gromacs/timing/gpu_timing.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/gmxassert.h"
 
 #include "nbnxm_cuda.h"
+#include "nbnxm_cuda_kernel_utils.cuh"
 #include "nbnxm_cuda_types.h"
 
 /***** The kernel declarations/definitions come here *****/
+
 
 /* Top-level kernel declaration generation: will generate through multiple
  * inclusion the following flavors for all kernel declarations:
@@ -111,11 +117,13 @@
 #    include "nbnxm_cuda_kernel_pruneonly.cu"
 #endif /* GMX_CUDA_NB_SINGLE_COMPILATION_UNIT */
 
-namespace Nbnxm
+#include "nbnxm_cuda_kernel_sci_sort.cuh"
+
+namespace gmx
 {
 
 /*! Nonbonded kernel function pointer type */
-typedef void (*nbnxn_cu_kfunc_ptr_t)(const NBAtomDataGpu, const NBParamGpu, const gpu_plist, bool);
+typedef void (*nbnxn_cu_kfunc_ptr_t)(const NBAtomDataGpu, const NBParamGpu, const GpuPairlist, bool);
 
 /*********************************/
 
@@ -357,8 +365,7 @@ static inline nbnxn_cu_kfunc_ptr_t select_nbnxn_kernel(enum ElecType           e
                "The VdW type requested is not implemented in the CUDA kernels.");
 
     /* assert assumptions made by the kernels */
-    GMX_ASSERT(c_nbnxnGpuClusterSize * c_nbnxnGpuClusterSize / c_nbnxnGpuClusterpairSplit
-                       == deviceInfo->prop.warpSize,
+    GMX_ASSERT(c_clusterSize * c_clusterSize / c_clusterSplitSize == deviceInfo->prop.warpSize,
                "The CUDA kernels require the "
                "cluster_size_i*cluster_size_j/nbnxn_gpu_clusterpair_split to match the warp size "
                "of the architecture targeted.");
@@ -399,23 +406,50 @@ static inline int calc_shmem_required_nonbonded(const int               num_thre
     /* size of shmem (force-buffers/xq/atom type preloading) */
     /* NOTE: with the default kernel on sm3.0 we need shmem only for pre-loading */
     /* i-atom x+q in shared memory */
-    shmem = c_nbnxnGpuNumClusterPerSupercluster * c_clSize * sizeof(float4);
+    shmem = c_superClusterSize * c_clusterSize * sizeof(float4);
     /* cj in shared memory, for each warp separately */
-    shmem += num_threads_z * c_nbnxnGpuClusterpairSplit * c_nbnxnGpuJgroupSize * sizeof(int);
+    shmem += num_threads_z * c_clusterSplitSize * c_jGroupSize * sizeof(int);
 
     if (nbp->vdwType == VdwType::CutCombGeom || nbp->vdwType == VdwType::CutCombLB)
     {
         /* i-atom LJ combination parameters in shared memory */
-        shmem += c_nbnxnGpuNumClusterPerSupercluster * c_clSize * sizeof(float2);
+        shmem += c_superClusterSize * c_clusterSize * sizeof(float2);
     }
     else
     {
         /* i-atom types in shared memory */
-        shmem += c_nbnxnGpuNumClusterPerSupercluster * c_clSize * sizeof(int);
+        shmem += c_superClusterSize * c_clusterSize * sizeof(int);
     }
+    /* for reducing prunedPairListCount over all warps in the block, to be used in plist sorting */
+    shmem += 1 * sizeof(int);
 
     return shmem;
 }
+
+
+/*! \brief Calculates the amount of shared memory required by the nonbonded kernel in use.
+ *
+ * Take counts prepared in combined prune and interaction kernel and use them to sort plist.
+ * Note that this sorted list is not available in the combined prune and interaction kernel
+ * itself, which causes a performance degredation of 1-10% for that initial call */
+static inline void gpuLaunchKernelSciSort(GpuPairlist* plist, const DeviceStream& deviceStream)
+{
+    performExclusiveScan(plist->sorting.nscanTemporary, plist->sorting.scanTemporary, plist, deviceStream);
+
+    KernelLaunchConfig configSortSci;
+    configSortSci.blockSize[0]     = c_sciSortingThreadsPerBlock;
+    configSortSci.blockSize[1]     = 1;
+    configSortSci.blockSize[2]     = 1;
+    configSortSci.gridSize[0]      = gmx::divideRoundUp(plist->numSci, c_sciSortingThreadsPerBlock);
+    configSortSci.sharedMemorySize = 0;
+
+    const auto kernelSciSort = nbnxnKernelBucketSciSort;
+
+    const auto kernelSciSortArgs = prepareGpuKernelArguments(kernelSciSort, configSortSci, plist);
+
+    launchGpuKernel(kernelSciSort, configSortSci, deviceStream, nullptr, "nbnxn_kernel_sci_sort", kernelSciSortArgs);
+}
+
 
 /*! As we execute nonbonded workload in separate streams, before launching
    the kernel we need to make sure that he following operations have completed:
@@ -438,8 +472,8 @@ void gpu_launch_kernel(NbnxmGpu* nb, const gmx::StepWorkload& stepWork, const In
 {
     NBAtomDataGpu*      adat         = nb->atdat;
     NBParamGpu*         nbp          = nb->nbparam;
-    gpu_plist*          plist        = nb->plist[iloc];
-    Nbnxm::GpuTimers*   timers       = nb->timers;
+    auto*               plist        = nb->plist[iloc].get();
+    GpuTimers*          timers       = nb->timers;
     const DeviceStream& deviceStream = *nb->deviceStreams[iloc];
 
     bool bDoTime = nb->bDoTime;
@@ -469,7 +503,7 @@ void gpu_launch_kernel(NbnxmGpu* nb, const gmx::StepWorkload& stepWork, const In
         gpu_launch_kernel_pruneonly(nb, iloc, 1);
     }
 
-    if (plist->nsci == 0)
+    if (plist->numSci == 0)
     {
         /* Don't launch an empty local kernel (not allowed with CUDA) */
         return;
@@ -491,12 +525,12 @@ void gpu_launch_kernel(NbnxmGpu* nb, const gmx::StepWorkload& stepWork, const In
     {
         num_threads_z = 2;
     }
-    int nblock = calc_nb_kernel_nblock(plist->nsci, &nb->deviceContext_->deviceInfo());
+    int nblock = calc_nb_kernel_nblock(plist->numSci, &nb->deviceContext_->deviceInfo());
 
 
     KernelLaunchConfig config;
-    config.blockSize[0] = c_clSize;
-    config.blockSize[1] = c_clSize;
+    config.blockSize[0] = c_clusterSize;
+    config.blockSize[1] = c_clusterSize;
     config.blockSize[2] = num_threads_z;
     config.gridSize[0]  = nblock;
     config.sharedMemorySize =
@@ -513,22 +547,29 @@ void gpu_launch_kernel(NbnxmGpu* nb, const gmx::StepWorkload& stepWork, const In
                 config.blockSize[2],
                 config.gridSize[0],
                 config.gridSize[1],
-                plist->nsci * c_nbnxnGpuNumClusterPerSupercluster,
-                c_nbnxnGpuNumClusterPerSupercluster,
-                plist->na_c,
+                plist->numSci * c_superClusterSize,
+                c_superClusterSize,
+                plist->numAtomsPerCluster,
                 config.sharedMemorySize);
     }
 
-    auto*      timingEvent = bDoTime ? timers->interaction[iloc].nb_k.fetchNextEvent() : nullptr;
-    const auto kernel =
-            select_nbnxn_kernel(nbp->elecType,
-                                nbp->vdwType,
-                                stepWork.computeEnergy,
-                                (plist->haveFreshList && !nb->timers->interaction[iloc].didPrune),
-                                &nb->deviceContext_->deviceInfo());
+    auto* timingEvent = bDoTime ? timers->interaction[iloc].nb_k.fetchNextEvent() : nullptr;
+
+    /* Whether we need to call a combined prune and interaction kernel or just an interaction
+     * kernel. bDoPrune being true implies we are not using dynamic pruning and are in the first
+     * call to the interaction kernel after a neighbour list step */
+    bool       bDoPrune = (plist->haveFreshList && !nb->timers->interaction[iloc].didPrune);
+    const auto kernel   = select_nbnxn_kernel(
+            nbp->elecType, nbp->vdwType, stepWork.computeEnergy, bDoPrune, &nb->deviceContext_->deviceInfo());
     const auto kernelArgs =
             prepareGpuKernelArguments(kernel, config, adat, nbp, plist, &stepWork.computeVirial);
     launchGpuKernel(kernel, config, deviceStream, timingEvent, "k_calc_nb", kernelArgs);
+
+    if (bDoPrune)
+    {
+        gpuLaunchKernelSciSort(plist, deviceStream);
+    }
+
 
     if (bDoTime)
     {
@@ -548,9 +589,9 @@ static inline int calc_shmem_required_prune(const int num_threads_z)
     int shmem;
 
     /* i-atom x in shared memory */
-    shmem = c_nbnxnGpuNumClusterPerSupercluster * c_clSize * sizeof(float4);
+    shmem = c_superClusterSize * c_clusterSize * sizeof(float4);
     /* cj in shared memory, for each warp separately */
-    shmem += num_threads_z * c_nbnxnGpuClusterpairSplit * c_nbnxnGpuJgroupSize * sizeof(int);
+    shmem += num_threads_z * c_clusterSplitSize * c_jGroupSize * sizeof(int);
 
     return shmem;
 }
@@ -559,8 +600,8 @@ void gpu_launch_kernel_pruneonly(NbnxmGpu* nb, const InteractionLocality iloc, c
 {
     NBAtomDataGpu*      adat         = nb->atdat;
     NBParamGpu*         nbp          = nb->nbparam;
-    gpu_plist*          plist        = nb->plist[iloc];
-    Nbnxm::GpuTimers*   timers       = nb->timers;
+    auto*               plist        = nb->plist[iloc].get();
+    GpuTimers*          timers       = nb->timers;
     const DeviceStream& deviceStream = *nb->deviceStreams[iloc];
 
     bool bDoTime = nb->bDoTime;
@@ -590,7 +631,7 @@ void gpu_launch_kernel_pruneonly(NbnxmGpu* nb, const InteractionLocality iloc, c
      * Also note that this CUDA implementation (parts tracking on device) differs from the
      * other backends (parts tracking on host, passed as kernel argument).
      */
-    int numSciInPartMax = (plist->nsci) / numParts;
+    int numSciInPartMax = (plist->numSci) / numParts;
 
     /* Don't launch the kernel if there is no work to do (not allowed with CUDA) */
     if (numSciInPartMax <= 0)
@@ -622,8 +663,8 @@ void gpu_launch_kernel_pruneonly(NbnxmGpu* nb, const InteractionLocality iloc, c
     int nblock        = calc_nb_kernel_nblock(numSciInPartMax, &nb->deviceContext_->deviceInfo());
 
     KernelLaunchConfig config;
-    config.blockSize[0]     = c_clSize;
-    config.blockSize[1]     = c_clSize;
+    config.blockSize[0]     = c_clusterSize;
+    config.blockSize[1]     = c_clusterSize;
     config.blockSize[2]     = num_threads_z;
     config.gridSize[0]      = nblock;
     config.sharedMemorySize = calc_shmem_required_prune(num_threads_z);
@@ -639,9 +680,9 @@ void gpu_launch_kernel_pruneonly(NbnxmGpu* nb, const InteractionLocality iloc, c
                 config.blockSize[2],
                 config.gridSize[0],
                 config.gridSize[1],
-                numSciInPartMax * c_nbnxnGpuNumClusterPerSupercluster,
-                c_nbnxnGpuNumClusterPerSupercluster,
-                plist->na_c,
+                numSciInPartMax * c_superClusterSize,
+                c_superClusterSize,
+                plist->numAtomsPerCluster,
                 config.sharedMemorySize);
     }
 
@@ -651,6 +692,11 @@ void gpu_launch_kernel_pruneonly(NbnxmGpu* nb, const InteractionLocality iloc, c
             plist->haveFreshList ? nbnxn_kernel_prune_cuda<true> : nbnxn_kernel_prune_cuda<false>;
     const auto kernelArgs = prepareGpuKernelArguments(kernel, config, adat, nbp, plist, &numParts);
     launchGpuKernel(kernel, config, deviceStream, timingEvent, kernelName, kernelArgs);
+
+    if (plist->haveFreshList)
+    {
+        gpuLaunchKernelSciSort(plist, deviceStream);
+    }
 
     /* TODO: consider a more elegant way to track which kernel has been called
        (combined or separate 1st pass prune, rolling prune). */
@@ -696,4 +742,4 @@ void cuda_set_cacheconfig()
     }
 }
 
-} // namespace Nbnxm
+} // namespace gmx

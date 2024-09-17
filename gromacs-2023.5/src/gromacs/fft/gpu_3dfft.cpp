@@ -48,6 +48,14 @@
 
 #if GMX_GPU_CUDA
 #    include "gpu_3dfft_cufft.h"
+#elif GMX_GPU_HIP
+#    if GMX_GPU_FFT_VKFFT
+#        include "gpu_3dfft_hip_vkfft.h"
+#    elif GMX_GPU_FFT_HIPFFT
+#        include "gpu_3dfft_hipfft.h"
+#    else
+#        include "gpu_3dfft_hip_rocfft.h"
+#    endif
 #elif GMX_GPU_OPENCL
 #    if GMX_GPU_FFT_VKFFT
 #        include "gpu_3dfft_ocl_vkfft.h"
@@ -56,10 +64,10 @@
 #    endif
 #elif GMX_GPU_SYCL
 #    include "gpu_3dfft_sycl.h"
-#    if GMX_GPU_FFT_MKL
+#    if GMX_GPU_FFT_MKL || GMX_GPU_FFT_ONEMKL
 #        include "gpu_3dfft_sycl_mkl.h"
-#    elif GMX_GPU_FFT_DBFFT
-#        include "gpu_3dfft_sycl_dbfft.h"
+#    elif GMX_GPU_FFT_BBFFT
+#        include "gpu_3dfft_sycl_bbfft.h"
 #    elif GMX_GPU_FFT_ROCFFT
 #        include "gpu_3dfft_sycl_rocfft.h"
 #    elif GMX_GPU_FFT_VKFFT
@@ -76,16 +84,14 @@
 #endif
 
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/exceptions.h"
 
 namespace gmx
 {
 
 // [[noreturn]] attributes must be added in the common headers, so it's easier to silence the warning here
-#ifdef __clang__
-#    pragma clang diagnostic push
-#    pragma clang diagnostic ignored "-Wmissing-noreturn"
-#endif
+CLANG_DIAGNOSTIC_IGNORE("-Wmissing-noreturn")
 
 Gpu3dFft::Gpu3dFft(FftBackend           backend,
                    bool                 allocateRealGrid,
@@ -141,6 +147,44 @@ Gpu3dFft::Gpu3dFft(FftBackend           backend,
             GMX_RELEASE_ASSERT(backend == FftBackend::HeFFTe_CUDA,
                                "Unsupported FFT backend requested");
     }
+#elif GMX_GPU_HIP
+    switch (backend)
+    {
+#    if GMX_GPU_FFT_VKFFT
+        case FftBackend::HipVkfft:
+            impl_ = std::make_unique<Gpu3dFft::ImplHipVkFft>(allocateRealGrid,
+                                                             comm,
+                                                             gridSizesInXForEachRank,
+                                                             gridSizesInYForEachRank,
+                                                             nz,
+                                                             performOutOfPlaceFFT,
+                                                             context,
+                                                             pmeStream,
+                                                             realGridSize,
+                                                             realGridSizePadded,
+                                                             complexGridSizePadded,
+                                                             realGrid,
+                                                             complexGrid);
+            break;
+#    elif GMX_GPU_FFT_ROCFFT
+        case FftBackend::HipRocfft:
+            impl_ = std::make_unique<Gpu3dFft::ImplHipRocfft>(allocateRealGrid,
+                                                              comm,
+                                                              gridSizesInXForEachRank,
+                                                              gridSizesInYForEachRank,
+                                                              nz,
+                                                              performOutOfPlaceFFT,
+                                                              context,
+                                                              pmeStream,
+                                                              realGridSize,
+                                                              realGridSizePadded,
+                                                              complexGridSizePadded,
+                                                              realGrid,
+                                                              complexGrid);
+            break;
+#    endif
+        default: GMX_THROW(InternalError("Unsupported FFT backend requested"));
+    }
 #elif GMX_GPU_OPENCL
     switch (backend)
     {
@@ -182,8 +226,9 @@ Gpu3dFft::Gpu3dFft(FftBackend           backend,
 #elif GMX_GPU_SYCL
     switch (backend)
     {
-#    if GMX_GPU_FFT_MKL
-        case FftBackend::SyclMkl:
+#    if GMX_GPU_FFT_MKL || GMX_GPU_FFT_ONEMKL
+        case FftBackend::SyclMkl: [[fallthrough]];
+        case FftBackend::SyclOneMkl:
             impl_ = std::make_unique<Gpu3dFft::ImplSyclMkl>(allocateRealGrid,
                                                             comm,
                                                             gridSizesInXForEachRank,
@@ -198,9 +243,9 @@ Gpu3dFft::Gpu3dFft(FftBackend           backend,
                                                             realGrid,
                                                             complexGrid);
             break;
-#    elif GMX_GPU_FFT_DBFFT
-        case FftBackend::SyclDbfft:
-            impl_ = std::make_unique<Gpu3dFft::ImplSyclDbfft>(allocateRealGrid,
+#    elif GMX_GPU_FFT_BBFFT
+        case FftBackend::SyclBbfft:
+            impl_ = std::make_unique<Gpu3dFft::ImplSyclBbfft>(allocateRealGrid,
                                                               comm,
                                                               gridSizesInXForEachRank,
                                                               gridSizesInYForEachRank,
@@ -384,8 +429,6 @@ void Gpu3dFft::perform3dFft(gmx_fft_direction dir, CommandEvent* timingEvent)
     impl_->perform3dFft(dir, timingEvent);
 }
 
-#ifdef __clang__
-#    pragma clang diagnostic pop
-#endif
+CLANG_DIAGNOSTIC_RESET
 
 } // namespace gmx

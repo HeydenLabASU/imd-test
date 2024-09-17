@@ -36,25 +36,37 @@
 #include "grompp.h"
 
 #include <cerrno>
+#include <cinttypes>
 #include <climits>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
+#include <iterator>
 #include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include <sys/types.h>
 
 #include "gromacs/applied_forces/awh/read_params.h"
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/ewald/ewald_utils.h"
 #include "gromacs/ewald/pme.h"
 #include "gromacs/fft/calcgrid.h"
 #include "gromacs/fileio/confio.h"
 #include "gromacs/fileio/enxio.h"
+#include "gromacs/fileio/filetypes.h"
+#include "gromacs/fileio/oenv.h"
+#include "gromacs/fileio/readinp.h"
 #include "gromacs/fileio/tpxio.h"
 #include "gromacs/fileio/trxio.h"
 #include "gromacs/fileio/warninp.h"
@@ -63,6 +75,7 @@
 #include "gromacs/gmxpreprocess/gen_maxwell_velocities.h"
 #include "gromacs/gmxpreprocess/gpp_atomtype.h"
 #include "gromacs/gmxpreprocess/grompp_impl.h"
+#include "gromacs/gmxpreprocess/massrepartitioning.h"
 #include "gromacs/gmxpreprocess/notset.h"
 #include "gromacs/gmxpreprocess/readir.h"
 #include "gromacs/gmxpreprocess/tomorse.h"
@@ -70,10 +83,12 @@
 #include "gromacs/gmxpreprocess/toputil.h"
 #include "gromacs/gmxpreprocess/vsite_parm.h"
 #include "gromacs/imd/imd.h"
+#include "gromacs/math/arrayrefwithpadding.h"
 #include "gromacs/math/boxmatrix.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/math/units.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdlib/calc_verletbuf.h"
 #include "gromacs/mdlib/compute_io.h"
 #include "gromacs/mdlib/constr.h"
@@ -86,29 +101,44 @@
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/nblist.h"
 #include "gromacs/mdtypes/state.h"
+#include "gromacs/nbnxm/nbnxm_enums.h"
 #include "gromacs/pbcutil/boxutilities.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/pulling/pull.h"
 #include "gromacs/random/seed.h"
+#include "gromacs/topology/atoms.h"
+#include "gromacs/topology/block.h"
+#include "gromacs/topology/forcefieldparameters.h"
+#include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/mtop_atomloops.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/symtab.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/topology/topology_enums.h"
 #include "gromacs/trajectory/trajectoryframe.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
+#include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/filestream.h"
 #include "gromacs/utility/futil.h"
 #include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/keyvaluetree.h"
 #include "gromacs/utility/keyvaluetreebuilder.h"
 #include "gromacs/utility/listoflists.h"
 #include "gromacs/utility/logger.h"
 #include "gromacs/utility/loggerbuilder.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/snprintf.h"
+#include "gromacs/utility/stringutil.h"
+
+struct gmx_output_env_t;
+struct pull_t;
 
 /* TODO The implementation details should move to their own source file. */
 InteractionOfType::InteractionOfType(gmx::ArrayRef<const int>  atoms,
@@ -571,26 +601,26 @@ static void molinfo2mtop(gmx::ArrayRef<const MoleculeInformation> mi, gmx_mtop_t
     }
 }
 
-static void new_status(const char*                           topfile,
-                       const char*                           topppfile,
-                       const char*                           confin,
-                       t_gromppopts*                         opts,
-                       t_inputrec*                           ir,
-                       gmx_bool                              bZero,
-                       bool                                  bGenVel,
-                       bool                                  bVerbose,
-                       t_state*                              state,
-                       PreprocessingAtomTypes*               atypes,
-                       gmx_mtop_t*                           sys,
-                       std::vector<MoleculeInformation>*     mi,
-                       std::unique_ptr<MoleculeInformation>* intermolecular_interactions,
-                       gmx::ArrayRef<InteractionsOfType>     interactions,
-                       CombinationRule*                      comb,
-                       double*                               reppow,
-                       real*                                 fudgeQQ,
-                       gmx_bool                              bMorse,
-                       WarningHandler*                       wi,
-                       const gmx::MDLogger&                  logger)
+static void new_status(const char*                                 topfile,
+                       const std::optional<std::filesystem::path>& topppfile,
+                       const char*                                 confin,
+                       t_gromppopts*                               opts,
+                       t_inputrec*                                 ir,
+                       gmx_bool                                    bZero,
+                       bool                                        bGenVel,
+                       bool                                        bVerbose,
+                       t_state*                                    state,
+                       PreprocessingAtomTypes*                     atypes,
+                       gmx_mtop_t*                                 sys,
+                       std::vector<MoleculeInformation>*           mi,
+                       std::unique_ptr<MoleculeInformation>*       intermolecular_interactions,
+                       gmx::ArrayRef<InteractionsOfType>           interactions,
+                       CombinationRule*                            comb,
+                       double*                                     reppow,
+                       real*                                       fudgeQQ,
+                       gmx_bool                                    bMorse,
+                       WarningHandler*                             wi,
+                       const gmx::MDLogger&                        logger)
 {
     std::vector<gmx_molblock_t> molblock;
     int                         i, nmismatch;
@@ -700,32 +730,31 @@ static void new_status(const char*                           topfile,
     snew(conftop, 1);
     // Note that all components in v are set to zero when no v is present in confin
     read_tps_conf(confin, conftop, nullptr, &x, EI_DYNAMICS(ir->eI) ? &v : nullptr, state->box, FALSE);
-    state->natoms = conftop->atoms.nr;
-    if (state->natoms != sys->natoms)
+    if (conftop->atoms.nr != sys->natoms)
     {
         gmx_fatal(FARGS,
                   "number of coordinates in coordinate file (%s, %d)\n"
                   "             does not match topology (%s, %d)",
                   confin,
-                  state->natoms,
+                  conftop->atoms.nr,
                   topfile,
                   sys->natoms);
     }
     /* It would be nice to get rid of the copies below, but we don't know
      * a priori if the number of atoms in confin matches what we expect.
      */
-    state->flags |= enumValueToBitMask(StateEntry::X);
+    state->addEntry(StateEntry::X);
     if (EI_DYNAMICS(ir->eI))
     {
-        state->flags |= enumValueToBitMask(StateEntry::V);
+        state->addEntry(StateEntry::V);
     }
-    state_change_natoms(state, state->natoms);
-    std::copy(x, x + state->natoms, state->x.data());
+    state->changeNumAtoms(sys->natoms);
+    std::copy(x, x + state->numAtoms(), state->x.data());
     sfree(x);
     if (EI_DYNAMICS(ir->eI))
     {
         GMX_RELEASE_ASSERT(v, "With dynamics we expect a velocity vector");
-        std::copy(v, v + state->natoms, state->v.data());
+        std::copy(v, v + state->numAtoms(), state->v.data());
         sfree(v);
     }
     /* This call fixes the box shape for runs with pressure scaling */
@@ -764,7 +793,7 @@ static void new_status(const char*                           topfile,
 
     if (bGenVel)
     {
-        std::vector<real> mass(state->natoms);
+        std::vector<real> mass(state->numAtoms());
 
         for (const AtomProxy atomP : AtomRange(*sys))
         {
@@ -777,11 +806,11 @@ static void new_status(const char*                           topfile,
         {
             GMX_LOG(logger.info).asParagraph().appendTextFormatted("Setting gen_seed to %d", opts->seed);
         }
-        GMX_RELEASE_ASSERT((state->flags | enumValueToBitMask(StateEntry::V)) != 0,
+        GMX_RELEASE_ASSERT(state->hasEntry(StateEntry::V),
                            "Generate velocities only makes sense when they are used");
         maxwell_speed(opts->tempi, opts->seed, sys, state->v.rvec_array(), logger);
 
-        stop_cm(logger, state->natoms, mass.data(), state->x.rvec_array(), state->v.rvec_array());
+        stop_cm(logger, state->numAtoms(), mass.data(), state->x.rvec_array(), state->v.rvec_array());
     }
 }
 
@@ -796,14 +825,14 @@ static void copy_state(const char* slog, t_trxframe* fr, bool bReadVel, t_state*
         gmx_fatal(FARGS, "Did not find a frame with coordinates in file %s", slog);
     }
 
-    std::copy(fr->x, fr->x + state->natoms, state->x.data());
+    std::copy(fr->x, fr->x + state->numAtoms(), state->x.data());
     if (bReadVel)
     {
         if (!fr->bV)
         {
             gmx_incons("Trajecory frame unexpectedly does not contain velocities");
         }
-        std::copy(fr->v, fr->v + state->natoms, state->v.data());
+        std::copy(fr->v, fr->v + state->numAtoms(), state->v.data());
     }
     if (fr->bBox)
     {
@@ -813,16 +842,16 @@ static void copy_state(const char* slog, t_trxframe* fr, bool bReadVel, t_state*
     *use_time = fr->time;
 }
 
-static void cont_status(const char*             slog,
-                        const char*             ener,
-                        bool                    bNeedVel,
-                        bool                    bGenVel,
-                        real                    fr_time,
-                        t_inputrec*             ir,
-                        t_state*                state,
-                        gmx_mtop_t*             sys,
-                        const gmx_output_env_t* oenv,
-                        const gmx::MDLogger&    logger)
+static void cont_status(const char*                                 slog,
+                        const std::optional<std::filesystem::path>& ener,
+                        bool                                        bNeedVel,
+                        bool                                        bGenVel,
+                        real                                        fr_time,
+                        t_inputrec*                                 ir,
+                        t_state*                                    state,
+                        gmx_mtop_t*                                 sys,
+                        const gmx_output_env_t*                     oenv,
+                        const gmx::MDLogger&                        logger)
 /* If fr_time == -1 read the last frame available which is complete */
 {
     bool         bReadVel;
@@ -879,14 +908,13 @@ static void cont_status(const char*             slog,
         }
     }
 
-    state->natoms = fr.natoms;
-
-    if (sys->natoms != state->natoms)
+    if (sys->natoms != fr.natoms)
     {
         gmx_fatal(FARGS,
                   "Number of atoms in Topology "
                   "is not the same as in Trajectory");
     }
+    state->changeNumAtoms(sys->natoms);
     copy_state(slog, &fr, bReadVel, state, &use_time);
 
     /* Find the appropriate frame */
@@ -909,7 +937,7 @@ static void cont_status(const char*             slog,
     if ((ir->pressureCouplingOptions.epc != PressureCoupling::No || ir->etc == TemperatureCoupling::NoseHoover)
         && ener)
     {
-        get_enx_state(ener, use_time, sys->groups, ir, state);
+        get_enx_state(ener.value(), use_time, sys->groups, ir, state);
         preserveBoxShape(ir->pressureCouplingOptions, ir->deform, state->box_rel, state->boxv);
     }
 }
@@ -1693,13 +1721,25 @@ static void set_verlet_buffer(const gmx_mtop_t*              mtop,
     VerletbufListSetup listSetup1x1;
     listSetup1x1.cluster_size_i = 1;
     listSetup1x1.cluster_size_j = 1;
-    const real rlist_1x1        = calcVerletBufferSize(
-            *mtop, effectiveAtomDensity, *ir, -1, ir->nstlist, ir->nstlist - 1, buffer_temp, listSetup1x1);
+    const real rlist_1x1        = calcVerletBufferSize(*mtop,
+                                                effectiveAtomDensity,
+                                                *ir,
+                                                ir->verletBufferPressureTolerance,
+                                                ir->nstlist,
+                                                ir->nstlist - 1,
+                                                buffer_temp,
+                                                listSetup1x1);
 
     /* Set the pair-list buffer size in ir */
     VerletbufListSetup listSetup4x4 = verletbufGetSafeListSetup(ListSetupType::CpuNoSimd);
-    ir->rlist                       = calcVerletBufferSize(
-            *mtop, effectiveAtomDensity, *ir, -1, ir->nstlist, ir->nstlist - 1, buffer_temp, listSetup4x4);
+    ir->rlist                       = calcVerletBufferSize(*mtop,
+                                     effectiveAtomDensity,
+                                     *ir,
+                                     ir->verletBufferPressureTolerance,
+                                     ir->nstlist,
+                                     ir->nstlist - 1,
+                                     buffer_temp,
+                                     listSetup4x4);
 
     const int n_nonlin_vsite = gmx::countNonlinearVsites(*mtop);
     if (n_nonlin_vsite > 0)
@@ -1866,6 +1906,31 @@ static void checkExclusionDistances(const gmx_mtop_t&              mtop,
     }
 }
 
+//! Add the velocity profile of \p deform to the velocities in \p state
+static void deformInitFlow(t_state* state, const matrix deform)
+{
+    // Deform gives the speed of box vector elements, we need to scale relative to the box size
+    matrix coordToVelocity;
+    for (int d1 = 0; d1 < DIM; d1++)
+    {
+        for (int d2 = 0; d2 < DIM; d2++)
+        {
+            coordToVelocity[d1][d2] = deform[d1][d2] / state->box[d1][d1];
+        }
+    }
+
+    for (int i = 0; i < state->numAtoms(); i++)
+    {
+        for (int d1 = 0; d1 < DIM; d1++)
+        {
+            for (int d2 = 0; d2 < DIM; d2++)
+            {
+                state->v[i][d2] += coordToVelocity[d1][d2] * state->x[i][d1];
+            }
+        }
+    }
+}
+
 int gmx_grompp(int argc, char* argv[])
 {
     const char* desc[] = {
@@ -1996,7 +2061,7 @@ int gmx_grompp(int argc, char* argv[])
     /* Command line options */
     gmx_bool bRenum   = TRUE;
     gmx_bool bRmVSBds = TRUE, bZero = FALSE;
-    int      i, maxwarn             = 0;
+    int      maxwarn = 0;
     real     fr_time = -1;
     t_pargs  pa[]    = {
         { "-v", FALSE, etBOOL, { &bVerbose }, "Be loud and noisy" },
@@ -2125,7 +2190,7 @@ int gmx_grompp(int argc, char* argv[])
 
     t_state state;
     new_status(fn,
-               opt2fn_null("-pp", NFILE, fnm),
+               opt2path_optional("-pp", NFILE, fnm),
                opt2fn("-c", NFILE, fnm),
                opts,
                ir,
@@ -2234,7 +2299,7 @@ int gmx_grompp(int argc, char* argv[])
                           "From GROMACS-2018, you need to specify the position restraint "
                           "coordinate files explicitly to avoid mistakes, although you can "
                           "still use the same file as you specify for the -c option.",
-                          fn);
+                          fnB);
             }
         }
         else
@@ -2267,10 +2332,10 @@ int gmx_grompp(int argc, char* argv[])
     if (interactions[F_CMAP].ncmap() > 0)
     {
         init_cmap_grid(&sys.ffparams.cmap_grid,
-                       interactions[F_CMAP].cmapAngles,
-                       interactions[F_CMAP].cmakeGridSpacing);
-        setup_cmap(interactions[F_CMAP].cmakeGridSpacing,
-                   interactions[F_CMAP].cmapAngles,
+                       interactions[F_CMAP].numCmaps_,
+                       interactions[F_CMAP].cmapGridSpacing_);
+        setup_cmap(interactions[F_CMAP].cmapGridSpacing_,
+                   interactions[F_CMAP].numCmaps_,
                    interactions[F_CMAP].cmap,
                    &sys.ffparams.cmap_grid);
     }
@@ -2326,6 +2391,8 @@ int gmx_grompp(int argc, char* argv[])
     /* check masses */
     check_mol(&sys, &wi);
 
+    checkRBDihedralSum(sys, *ir, &wi);
+
     if (haveFepPerturbedMassesInSettles(sys))
     {
         wi.addError(
@@ -2334,6 +2401,18 @@ int gmx_grompp(int argc, char* argv[])
     }
 
     checkForUnboundAtoms(&sys, bVerbose, &wi, logger);
+
+    // Now that we have the topology finalized and checked, we can repartition masses
+    if (ir->massRepartitionFactor > 1)
+    {
+        const bool useFep = (ir->efep != FreeEnergyPerturbationType::No);
+
+        gmx::repartitionAtomMasses(&sys, useFep, ir->massRepartitionFactor, &wi);
+    }
+    else if (ir->massRepartitionFactor < 1)
+    {
+        wi.addError("The mass repartitioning factor should be >= 1");
+    }
 
     if (EI_DYNAMICS(ir->eI) && ir->eI != IntegrationAlgorithm::BD)
     {
@@ -2357,7 +2436,7 @@ int gmx_grompp(int argc, char* argv[])
     {
         GMX_LOG(logger.info).asParagraph().appendTextFormatted("initialising group options...");
     }
-    do_index(mdparin, ftp2fn_null(efNDX, NFILE, fnm), &sys, bVerbose, mdModules.notifiers(), ir, &wi);
+    do_index(mdparin, ftp2path_optional(efNDX, NFILE, fnm), &sys, bVerbose, mdModules.notifiers(), ir, &wi);
 
     // Notify topology to MdModules for pre-processing after all indexes were built
     mdModules.notifiers().preProcessingNotifier_.notify(&sys);
@@ -2455,12 +2534,21 @@ int gmx_grompp(int argc, char* argv[])
     /* Init the temperature coupling state */
     init_gtc_state(&state, ir->opts.ngtc, 0, ir->opts.nhchainlength); /* need to add nnhpres here? */
 
+    /* With the atom masses available, we can process constant acceleration options */
+    processConstantAcceleration(ir, sys);
+
+    /* After we are done with all checks on the state, we can add the flow profile */
+    if (opts->deformInitFlow)
+    {
+        deformInitFlow(&state, ir->deform);
+    }
+
     if (debug)
     {
         pr_symtab(debug, 0, "After index", &sys.symtab);
     }
 
-    triple_check(mdparin, ir, &sys, &wi);
+    triple_check(mdparin, *ir, sys, &wi);
     close_symtab(&sys.symtab);
     if (debug)
     {
@@ -2481,7 +2569,7 @@ int gmx_grompp(int argc, char* argv[])
                     .appendTextFormatted("getting data from old trajectory ...");
         }
         cont_status(ftp2fn(efTRN, NFILE, fnm),
-                    ftp2fn_null(efEDR, NFILE, fnm),
+                    ftp2path_optional(efEDR, NFILE, fnm),
                     bNeedVel,
                     bGenVel,
                     fr_time,
@@ -2530,24 +2618,9 @@ int gmx_grompp(int argc, char* argv[])
     if (ir->efep != FreeEnergyPerturbationType::No)
     {
         state.fep_state = ir->fepvals->init_fep_state;
-        for (i = 0; i < static_cast<int>(FreeEnergyPerturbationCouplingType::Count); i++)
+        for (const auto couplingType : gmx::EnumerationWrapper<FreeEnergyPerturbationCouplingType>{})
         {
-            /* init_lambda trumps state definitions*/
-            if (ir->fepvals->init_lambda >= 0)
-            {
-                state.lambda[i] = ir->fepvals->init_lambda;
-            }
-            else
-            {
-                if (ir->fepvals->all_lambda[i].empty())
-                {
-                    gmx_fatal(FARGS, "Values of lambda not set for a free energy calculation!");
-                }
-                else
-                {
-                    state.lambda[i] = ir->fepvals->all_lambda[i][state.fep_state];
-                }
-            }
+            state.lambda[static_cast<int>(couplingType)] = ir->fepvals->initialLambda(couplingType);
         }
     }
 
@@ -2571,21 +2644,13 @@ int gmx_grompp(int argc, char* argv[])
         {
             copy_mat(ir->pressureCouplingOptions.compress, compressibility);
         }
-        real initLambda = 0;
+        real initialLambda = 0;
         if (ir->efep != FreeEnergyPerturbationType::No)
         {
-            if (ir->fepvals->init_fep_state >= 0)
-            {
-                initLambda = ir->fepvals->all_lambda[static_cast<int>(
-                        FreeEnergyPerturbationCouplingType::Fep)][ir->fepvals->init_fep_state];
-            }
-            else
-            {
-                initLambda = ir->fepvals->init_lambda;
-            }
+            initialLambda = ir->fepvals->initialLambda(FreeEnergyPerturbationCouplingType::Fep);
         }
         setStateDependentAwhParams(
-                ir->awhParams.get(), *ir->pull, pull, state.box, ir->pbcType, compressibility, *ir, initLambda, sys, &wi);
+                ir->awhParams.get(), *ir->pull, pull, state.box, ir->pbcType, compressibility, *ir, initialLambda, sys, &wi);
     }
 
     if (ir->bPull)
@@ -2654,6 +2719,10 @@ int gmx_grompp(int argc, char* argv[])
         copy_mat(state.box, coordinatesAndBoxPreprocessed.box_);
         coordinatesAndBoxPreprocessed.pbc_ = ir->pbcType;
         mdModules.notifiers().preProcessingNotifier_.notify(coordinatesAndBoxPreprocessed);
+
+        // Send also the constant ensemble temperature if available.
+        gmx::EnsembleTemperature ensembleTemperature(*ir);
+        mdModules.notifiers().preProcessingNotifier_.notify(ensembleTemperature);
     }
 
     // Add the md modules internal parameters that are not mdp options

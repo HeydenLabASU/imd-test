@@ -39,12 +39,18 @@
 #include <cstdio>
 
 #include <algorithm>
+#include <filesystem>
+#include <optional>
+#include <string>
 
 #include "gromacs/topology/idef.h"
+#include "gromacs/topology/ifunc.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/smalloc.h"
+#include "gromacs/utility/stringcompare.h"
 #include "gromacs/utility/stringtoenumvalueconverter.h"
 
 const char* enumValueToString(Directive d)
@@ -293,9 +299,9 @@ static gmx::EnumerationArray<Directive, Directive*> necessary = { { nullptr } };
 static void set_nec(Directive** n, ...)
 /* Must always have at least one extra argument */
 {
-    va_list   ap;
-    int       ind = 0;
-    Directive d;
+    std::va_list ap;
+    int          ind = 0;
+    Directive    d;
 
     va_start(ap, n);
     do

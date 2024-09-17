@@ -47,11 +47,17 @@
 #include <cstring>
 
 #include <algorithm>
+#include <filesystem>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/iserializer.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/stringutil.h"
@@ -126,7 +132,7 @@ void StringTable::serializeStringTable(gmx::ISerializer* serializer)
     }
 }
 
-StringTableEntry StringTable::at(gmx::index index) const
+StringTableEntry StringTable::at(gmx::Index index) const
 {
     if (index >= gmx::ssize(table_))
     {
@@ -135,7 +141,7 @@ StringTableEntry StringTable::at(gmx::index index) const
     return StringTableEntry(table_[index], index);
 }
 
-StringTableEntry StringTable::operator[](gmx::index index) const
+StringTableEntry StringTable::operator[](gmx::Index index) const
 {
     GMX_ASSERT(index < gmx::ssize(table_), "Can't read beyond last entry");
     return StringTableEntry(table_[index], index);

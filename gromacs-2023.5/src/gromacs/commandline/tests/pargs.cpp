@@ -45,12 +45,22 @@
 
 #include "gromacs/commandline/pargs.h"
 
+#include <cstddef>
+#include <cstdint>
+
+#include <filesystem>
 #include <string>
 
 #include <gtest/gtest.h>
 
+#include "gromacs/commandline/filenm.h"
+#include "gromacs/fileio/filetypes.h"
+#include "gromacs/fileio/oenv.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/path.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/stringutil.h"
 #include "gromacs/utility/textwriter.h"
 
@@ -58,6 +68,12 @@
 #include "testutils/testasserts.h"
 #include "testutils/testfilemanager.h"
 
+struct gmx_output_env_t;
+
+namespace gmx
+{
+namespace test
+{
 namespace
 {
 
@@ -96,19 +112,17 @@ public:
     std::string addFileArg(const char* name, const char* extension, FileArgumentType type)
     {
         auto filename(tempFiles_.getTemporaryFilePath(extension));
-        gmx::TextWriter::writeFileFromString(filename.u8string(), "Dummy file");
+        gmx::TextWriter::writeFileFromString(filename.string(), "Dummy file");
         if (name != nullptr)
         {
             args_.append(name);
             switch (type)
             {
-                case efFull: args_.append(filename.u8string()); break;
-                case efNoExtension: args_.append(gmx::stripExtension(filename).u8string()); break;
+                case efFull: args_.append(filename.string()); break;
+                case efNoExtension: args_.append(gmx::stripExtension(filename).string()); break;
                 case efEmptyValue: break;
             }
         }
-        // We usually use u8string() to allow conversion to char* (see #4635)
-        // But we don't convert it to char* here, and u8string is buggy in GCC 9.3 (see #4785).
         return filename.string();
     }
 
@@ -415,8 +429,8 @@ TEST_F(ParseCommonArgsTest, HandlesCompressedFiles)
     expectedF                       = gmx::stripExtension(expectedF);
     expectedG                       = gmx::stripExtension(expectedG);
     parseFromArgs(0, fnm, {});
-    EXPECT_EQ(expectedF.u8string(), opt2fn("-f", nfile(), fnm));
-    EXPECT_EQ(expectedG.u8string(), opt2fn("-g", nfile(), fnm));
+    EXPECT_EQ(expectedF.string(), opt2fn("-f", nfile(), fnm));
+    EXPECT_EQ(expectedG.string(), opt2fn("-g", nfile(), fnm));
 }
 
 TEST_F(ParseCommonArgsTest, AcceptsUnknownTrajectoryExtension)
@@ -435,7 +449,7 @@ TEST_F(ParseCommonArgsTest, CompletesExtensionFromExistingFile)
     std::string expected2 = addFileArg("-f2", "2.gro", efNoExtension);
     std::string expected3 = addFileArg("-f3", "3.tng", efNoExtension);
     std::string expected4 = addFileArg("-f4", ".gro", efEmptyValue);
-    std::string def4      = gmx::stripExtension(expected4).u8string();
+    std::string def4      = gmx::stripExtension(expected4).string();
     t_filenm    fnm[]     = { { efTRX, "-f1", nullptr, ffREAD },
                        { efTRX, "-f2", nullptr, ffREAD },
                        { efTRX, "-f3", nullptr, ffREAD },
@@ -458,7 +472,7 @@ TEST_F(ParseCommonArgsTest, CompletesExtensionFromExistingFileWithDefaultFileNam
     std::string expected2 = addFileArg("-f2", ".pdb", efEmptyValue);
     std::string expected3 = addFileArg("-f3", ".trr", efEmptyValue);
     std::string expected4 = addFileArg(nullptr, ".pdb", efEmptyValue);
-    std::string deffnm    = gmx::stripExtension(expected3).u8string();
+    std::string deffnm    = gmx::stripExtension(expected3).string();
     args_.append("-deffnm");
     args_.append(deffnm);
     parseFromArgs(PCA_CAN_SET_DEFFNM, fnm, {});
@@ -496,3 +510,5 @@ TEST_F(ParseCommonArgsTest, CanKeepUnknownArgs)
 }
 
 } // namespace
+} // namespace test
+} // namespace gmx

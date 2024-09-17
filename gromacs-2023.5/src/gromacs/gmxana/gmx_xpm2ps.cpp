@@ -40,27 +40,39 @@
 #include <cstring>
 
 #include <algorithm>
+#include <filesystem>
 #include <numeric>
 #include <string>
+#include <type_traits>
+#include <vector>
 
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/commandline/viewit.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/matio.h"
 #include "gromacs/fileio/readinp.h"
+#include "gromacs/fileio/rgb.h"
 #include "gromacs/fileio/trxio.h"
 #include "gromacs/fileio/warninp.h"
 #include "gromacs/fileio/writeps.h"
 #include "gromacs/gmxana/gmx_ana.h"
+#include "gromacs/math/functions.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/filestream.h"
 #include "gromacs/utility/futil.h"
 #include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/stringutil.h"
+
+struct gmx_output_env_t;
 
 #define FUDGE 1.2
 #define DDD 2
@@ -139,9 +151,9 @@ static void get_params(const char* mpin, const char* mpout, t_psrec* psr)
 
     if (mpin != nullptr)
     {
-        std::string        libmpin = gmx::findLibraryFile(mpin).u8string();
-        gmx::TextInputFile stream(libmpin);
-        inp = read_inpfile(&stream, libmpin.c_str(), &wi);
+        const std::filesystem::path libmpin = gmx::findLibraryFile(mpin);
+        gmx::TextInputFile          stream(libmpin);
+        inp = read_inpfile(&stream, libmpin, &wi);
     }
     else
     {
@@ -254,7 +266,7 @@ static void leg_continuous(t_psdata*                      ps,
 {
     real       xx0;
     real       yhh, boxxh, boxyh;
-    gmx::index mapIndex = gmx::ssize(map) - mapoffset;
+    gmx::Index mapIndex = gmx::ssize(map) - mapoffset;
 
     boxyh = fontsize;
     if (x < 8 * fontsize)
@@ -272,7 +284,7 @@ static void leg_continuous(t_psdata*                      ps,
     /* LANDSCAPE */
     xx0 = x0 - (mapIndex * boxxh) / 2.0;
 
-    for (gmx::index i = 0; (i < mapIndex); i++)
+    for (gmx::Index i = 0; (i < mapIndex); i++)
     {
         ps_rgb(ps, &(map[i + mapoffset].rgb));
         ps_fillbox(ps, xx0 + i * boxxh, y0, xx0 + (i + 1) * boxxh, y0 + boxyh);
@@ -640,8 +652,8 @@ static std::vector<t_mapping> add_maps(gmx::ArrayRef<t_mapping> map1, gmx::Array
            map1.size(),
            map2.size(),
            map.size());
-    gmx::index k = 0;
-    for (gmx::index j = 0; j < gmx::ssize(map1) && k < gmx::ssize(map); ++j, ++k)
+    gmx::Index k = 0;
+    for (gmx::Index j = 0; j < gmx::ssize(map1) && k < gmx::ssize(map); ++j, ++k)
     {
         map[k].code.c1 = mapper[k % nsymbols];
         if (map.size() > nsymbols)
@@ -653,7 +665,7 @@ static std::vector<t_mapping> add_maps(gmx::ArrayRef<t_mapping> map1, gmx::Array
         map[k].rgb.b = map1[j].rgb.b;
         map[k].desc  = map1[j].desc;
     }
-    for (gmx::index j = 0; j < gmx::ssize(map2) && k < gmx::ssize(map); ++j, ++k)
+    for (gmx::Index j = 0; j < gmx::ssize(map2) && k < gmx::ssize(map); ++j, ++k)
     {
         map[k].code.c1 = mapper[k % nsymbols];
         if (map.size() > nsymbols)
@@ -687,7 +699,7 @@ static void xpm_mat(const char*             outf,
 
     GMX_RELEASE_ASSERT(mat.size() == mat2.size(),
                        "Combined matrix write requires matrices of the same size");
-    for (gmx::index i = 0; i != gmx::ssize(mat); ++i)
+    for (gmx::Index i = 0; i != gmx::ssize(mat); ++i)
     {
         // Color maps that differ only in RGB value are considered different
         if (mat2.empty() || std::equal(mat[i].map.begin(), mat[i].map.end(), mat2[i].map.begin()))
@@ -926,7 +938,7 @@ static void ps_mat(const char*             outf,
         draw_boxes(&out, x0, y0, w, mat, psr);
     }
 
-    for (gmx::index i = 0; i != gmx::ssize(mat); ++i)
+    for (gmx::Index i = 0; i != gmx::ssize(mat); ++i)
     {
         if (bTitle || (bTitleOnce && i == gmx::ssize(mat) - 1))
         {
@@ -1075,14 +1087,14 @@ static void prune_mat(gmx::ArrayRef<t_matrix> mat, gmx::ArrayRef<t_matrix> mat2,
 {
     GMX_RELEASE_ASSERT(mat.size() == mat2.size() || mat2.empty(),
                        "Matrix pruning requires matrices of the same size");
-    for (gmx::index i = 0; i != gmx::ssize(mat); ++i)
+    for (gmx::Index i = 0; i != gmx::ssize(mat); ++i)
     {
         fprintf(stderr,
                 "converting %dx%d matrix to %dx%d\n",
                 mat[i].nx,
                 mat[i].ny,
-                (mat[i].nx + skip - 1) / skip,
-                (mat[i].ny + skip - 1) / skip);
+                gmx::divideRoundUp(mat[i].nx, skip),
+                gmx::divideRoundUp(mat[i].ny, skip));
         /* walk through matrix */
         int xs = 0;
         for (int x = 0; (x < mat[i].nx); x++)
@@ -1119,12 +1131,12 @@ static void prune_mat(gmx::ArrayRef<t_matrix> mat, gmx::ArrayRef<t_matrix> mat2,
             }
         }
         /* adjust parameters */
-        mat[i].nx = (mat[i].nx + skip - 1) / skip;
-        mat[i].ny = (mat[i].ny + skip - 1) / skip;
+        mat[i].nx = gmx::divideRoundUp(mat[i].nx, skip);
+        mat[i].ny = gmx::divideRoundUp(mat[i].ny, skip);
         if (!mat2.empty())
         {
-            mat2[i].nx = (mat2[i].nx + skip - 1) / skip;
-            mat2[i].ny = (mat2[i].ny + skip - 1) / skip;
+            mat2[i].nx = gmx::divideRoundUp(mat2[i].nx, skip);
+            mat2[i].ny = gmx::divideRoundUp(mat2[i].ny, skip);
         }
     }
 }
@@ -1132,7 +1144,7 @@ static void prune_mat(gmx::ArrayRef<t_matrix> mat, gmx::ArrayRef<t_matrix> mat2,
 static void zero_lines(gmx::ArrayRef<t_matrix> mat, gmx::ArrayRef<t_matrix> mat2)
 {
     GMX_RELEASE_ASSERT(mat.size() == mat2.size(), "zero_lines requires matrices of the same size");
-    for (gmx::index i = 0; i != gmx::ssize(mat); ++i)
+    for (gmx::Index i = 0; i != gmx::ssize(mat); ++i)
     {
         for (int m = 0; m < (!mat2.empty() ? 2 : 1); m++)
         {
@@ -1183,7 +1195,7 @@ static void write_combined_matrix(int                     ecombine,
     out = gmx_ffopen(fn, "w");
     GMX_RELEASE_ASSERT(mat1.size() == mat2.size(),
                        "Combined matrix write requires matrices of the same size");
-    for (gmx::index k = 0; k != gmx::ssize(mat1); k++)
+    for (gmx::Index k = 0; k != gmx::ssize(mat1); k++)
     {
         if (mat2[k].nx != mat1[k].nx || mat2[k].ny != mat1[k].ny)
         {
@@ -1284,7 +1296,7 @@ static void do_mat(gmx::ArrayRef<t_matrix> mat,
                        "Combined matrix write requires matrices of the same size");
     if (!mat2.empty())
     {
-        for (gmx::index k = 0; k != gmx::ssize(mat); k++)
+        for (gmx::Index k = 0; k != gmx::ssize(mat); k++)
         {
             if ((mat2[k].nx != mat[k].nx) || (mat2[k].ny != mat[k].ny))
             {
@@ -1306,7 +1318,7 @@ static void do_mat(gmx::ArrayRef<t_matrix> mat,
             }
         }
     }
-    for (gmx::index i = 0; i != gmx::ssize(mat); i++)
+    for (gmx::Index i = 0; i != gmx::ssize(mat); i++)
     {
         fprintf(stderr, "Matrix %zd is %d x %d\n", i, mat[i].nx, mat[i].ny);
     }
@@ -1453,7 +1465,8 @@ int gmx_xpm2ps(int argc, char* argv[])
     };
 
     gmx_output_env_t* oenv;
-    const char *      fn, *epsfile = nullptr, *xpmfile = nullptr;
+    const char*       fn;
+    const char*       fn2;
     int               i, etitle, elegend, ediag, erainbow, ecombine;
     gmx_bool          bTitle, bTitleOnce, bDiag, bFirstDiag, bGrad;
     static gmx_bool   bFrame = TRUE, bZeroLine = FALSE, bYonce = FALSE;
@@ -1557,29 +1570,6 @@ int gmx_xpm2ps(int argc, char* argv[])
         elegend = elNone;
     }
 
-    epsfile = ftp2fn_null(efEPS, NFILE, fnm);
-    xpmfile = opt2fn_null("-xpm", NFILE, fnm);
-    if (epsfile == nullptr && xpmfile == nullptr)
-    {
-        if (ecombine != ecHalves)
-        {
-            xpmfile = opt2fn("-xpm", NFILE, fnm);
-        }
-        else
-        {
-            epsfile = ftp2fn(efEPS, NFILE, fnm);
-        }
-    }
-    if (ecombine != ecHalves && epsfile)
-    {
-        fprintf(stderr,
-                "WARNING: can only write result of arithmetic combination "
-                "of two matrices to .xpm file\n"
-                "         file %s will not be written\n",
-                epsfile);
-        epsfile = nullptr;
-    }
-
     bDiag      = ediag != edNone;
     bFirstDiag = ediag != edSecond;
 
@@ -1592,16 +1582,16 @@ int gmx_xpm2ps(int argc, char* argv[])
             mat.size(),
             (mat.size() > 1) ? "ces" : "x",
             fn);
-    fn = opt2fn_null("-f2", NFILE, fnm);
-    if (fn)
+    fn2 = opt2fn_null("-f2", NFILE, fnm);
+    if (fn2)
     {
-        mat2 = read_xpm_matrix(fn);
+        mat2 = read_xpm_matrix(fn2);
         fprintf(stderr,
                 "There %s %zu matri%s in %s\n",
                 (mat2.size() > 1) ? "are" : "is",
                 mat2.size(),
                 (mat2.size() > 1) ? "ces" : "x",
-                fn);
+                fn2);
         if (mat.size() != mat2.size())
         {
             fprintf(stderr, "Different number of matrices, using the smallest number.\n");
@@ -1663,8 +1653,18 @@ int gmx_xpm2ps(int argc, char* argv[])
 
     if (ecombine && ecombine != ecHalves)
     {
+        const char* epsfile;
+        epsfile = ftp2fn_null(efEPS, NFILE, fnm);
+        if (epsfile)
+        {
+            fprintf(stderr,
+                    "WARNING: can only write result of arithmetic combination "
+                    "of two matrices to .xpm file\n"
+                    "         file %s will not be written\n",
+                    epsfile);
+        }
         write_combined_matrix(ecombine,
-                              xpmfile,
+                              opt2fn("-xpm", NFILE, fnm),
                               mat,
                               mat2,
                               opt2parg_bSet("-cmin", NPA, pa) ? &cmin : nullptr,
@@ -1685,8 +1685,8 @@ int gmx_xpm2ps(int argc, char* argv[])
                size,
                boxx,
                boxy,
-               epsfile,
-               xpmfile,
+               ftp2fn(efEPS, NFILE, fnm),
+               opt2fn_null("-xpm", NFILE, fnm),
                opt2fn_null("-di", NFILE, fnm),
                opt2fn_null("-do", NFILE, fnm),
                skip,

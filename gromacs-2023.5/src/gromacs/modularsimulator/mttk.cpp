@@ -70,22 +70,22 @@ void MttkData::build(LegacySimulatorData*                    legacySimulatorData
                      const MttkPropagatorConnectionDetails&  mttkPropagatorConnectionDetails)
 {
     // Uses reference temperature of first T-group
-    const real ensembleTemperature = constantEnsembleTemperature(*legacySimulatorData->inputrec);
+    const real ensembleTemperature = constantEnsembleTemperature(*legacySimulatorData->inputRec_);
     const real referencePressure =
-            ::trace(legacySimulatorData->inputrec->pressureCouplingOptions.ref_p) / DIM;
+            ::trace(legacySimulatorData->inputRec_->pressureCouplingOptions.ref_p) / DIM;
     // Weights are set based on initial volume
     real initialVolume = det(statePropagatorData->constBox());
 
     // When using domain decomposition, statePropagatorData might not have the initial
     // box yet, so we get it from the legacy state_global instead.
     // TODO: Make sure we have a valid state in statePropagatorData at all times (#3421)
-    if (haveDDAtomOrdering(*legacySimulatorData->cr))
+    if (haveDDAtomOrdering(*legacySimulatorData->cr_))
     {
-        if (MAIN(legacySimulatorData->cr))
+        if (MAIN(legacySimulatorData->cr_))
         {
-            initialVolume = det(legacySimulatorData->state_global->box);
+            initialVolume = det(legacySimulatorData->stateGlobal_->box);
         }
-        dd_bcast(legacySimulatorData->cr->dd, int(sizeof(real)), &initialVolume);
+        dd_bcast(legacySimulatorData->cr_->dd, int(sizeof(real)), &initialVolume);
     }
 
     GMX_RELEASE_ASSERT(
@@ -110,13 +110,13 @@ void MttkData::build(LegacySimulatorData*                    legacySimulatorData
             MttkData::dataID(),
             MttkData(ensembleTemperature,
                      referencePressure,
-                     legacySimulatorData->inputrec->pressureCouplingOptions.nstpcouple
-                             * legacySimulatorData->inputrec->delta_t,
-                     legacySimulatorData->inputrec->pressureCouplingOptions.tau_p,
+                     legacySimulatorData->inputRec_->pressureCouplingOptions.nstpcouple
+                             * legacySimulatorData->inputRec_->delta_t,
+                     legacySimulatorData->inputRec_->pressureCouplingOptions.tau_p,
                      initialVolume,
-                     legacySimulatorData->inputrec->opts.nrdf[0],
-                     legacySimulatorData->inputrec->delta_t,
-                     legacySimulatorData->inputrec->pressureCouplingOptions.compress,
+                     legacySimulatorData->inputRec_->opts.nrdf[0],
+                     legacySimulatorData->inputRec_->delta_t,
+                     legacySimulatorData->inputRec_->pressureCouplingOptions.compress,
                      statePropagatorData,
                      mttkPropagatorConnection));
     auto* ptrToDataObject = builderHelper->simulationData<MttkData>(MttkData::dataID()).value();
@@ -186,7 +186,7 @@ void MttkData::calculateIntegralIfNeeded()
 {
     // Check whether coordinate time divided by the time step is close to integer
     const bool calculationNeeded = timesClose(
-            lround(etaVelocityTime_ / couplingTimeStep_) * couplingTimeStep_, etaVelocityTime_);
+            std::lround(etaVelocityTime_ / couplingTimeStep_) * couplingTimeStep_, etaVelocityTime_);
 
     if (calculationNeeded)
     {
@@ -431,8 +431,7 @@ void MttkPropagatorConnection::connectWithPropagatorVelocityPreStepScaling(const
     {
         connectionData.setNumVelocityScalingVariables(1, ScaleVelocities::PreStepOnly);
         startVelocityScalingFactors_.emplace_back(connectionData.getViewOnStartVelocityScaling());
-        propagatorCallbacks_.emplace_back(
-                std::make_tuple(connectionData.getVelocityScalingCallback(), offset));
+        propagatorCallbacks_.emplace_back(connectionData.getVelocityScalingCallback(), offset);
     }
 }
 
@@ -447,8 +446,7 @@ void MttkPropagatorConnection::connectWithPropagatorVelocityPostStepScaling(cons
         // used for propagators doing BOTH start and end scaling
         connectionData.setNumVelocityScalingVariables(1, ScaleVelocities::PreStepOnly);
         endVelocityScalingFactors_.emplace_back(connectionData.getViewOnStartVelocityScaling());
-        propagatorCallbacks_.emplace_back(
-                std::make_tuple(connectionData.getVelocityScalingCallback(), offset));
+        propagatorCallbacks_.emplace_back(connectionData.getVelocityScalingCallback(), offset);
     }
 }
 
@@ -460,8 +458,7 @@ void MttkPropagatorConnection::connectWithPropagatorPositionPreStepScaling(const
     {
         connectionData.setNumPositionScalingVariables(1);
         startPositionScalingFactors_.emplace_back(connectionData.getViewOnPositionScaling());
-        propagatorCallbacks_.emplace_back(
-                std::make_tuple(connectionData.getPositionScalingCallback(), offset));
+        propagatorCallbacks_.emplace_back(connectionData.getPositionScalingCallback(), offset);
     }
 }
 
@@ -473,8 +470,7 @@ void MttkPropagatorConnection::connectWithPropagatorPositionPostStepScaling(cons
     {
         connectionData.setNumPositionScalingVariables(1);
         endPositionScalingFactors_.emplace_back(connectionData.getViewOnPositionScaling());
-        propagatorCallbacks_.emplace_back(
-                std::make_tuple(connectionData.getPositionScalingCallback(), offset));
+        propagatorCallbacks_.emplace_back(connectionData.getPositionScalingCallback(), offset);
     }
 }
 
@@ -536,9 +532,8 @@ void MttkElement::propagateEtaVelocity(Step step)
 
     tensor currentPressureTensor;
 
-    const real currentPressure =
-            calc_pres(pbcType_, numWalls_, statePropagatorData_->constBox(), modifiedKineticEnergy, virial, currentPressureTensor)
-            + energyData_->enerdata()->term[F_PDISPCORR];
+    const real currentPressure = calc_pres(
+            pbcType_, numWalls_, statePropagatorData_->constBox(), modifiedKineticEnergy, virial, currentPressureTensor);
 
     const real etaAcceleration = DIM * currentVolume * (mttkData_->invEtaMass() / c_presfac)
                                  * (currentPressure - mttkData_->referencePressure());
@@ -610,18 +605,18 @@ ISimulatorElement* MttkElement::getElementPointerImpl(
 
     // Element is now owned by the caller of this method, who will handle lifetime (see ModularSimulatorAlgorithm)
     auto* element = static_cast<MttkElement*>(builderHelper->storeElement(std::make_unique<MttkElement>(
-            legacySimulatorData->inputrec->nsttcouple,
+            legacySimulatorData->inputRec_->nsttcouple,
             offset,
-            legacySimulatorData->inputrec->delta_t
-                    * legacySimulatorData->inputrec->pressureCouplingOptions.nstpcouple / 2,
+            legacySimulatorData->inputRec_->delta_t
+                    * legacySimulatorData->inputRec_->pressureCouplingOptions.nstpcouple / 2,
             scheduleOnInitStep,
-            legacySimulatorData->inputrec->init_step,
+            legacySimulatorData->inputRec_->init_step,
             statePropagatorData,
             energyData,
             mttkData,
-            legacySimulatorData->inputrec->pbcType,
-            legacySimulatorData->inputrec->nwall,
-            legacySimulatorData->inputrec->opts.nrdf[0])));
+            legacySimulatorData->inputRec_->pbcType,
+            legacySimulatorData->inputRec_->nwall,
+            legacySimulatorData->inputRec_->opts.nrdf[0])));
 
     return element;
 }
@@ -679,7 +674,7 @@ ISimulatorElement* MttkBoxScaling::getElementPointerImpl(
     }
 
     return builderHelper->storeElement(std::make_unique<MttkBoxScaling>(
-            legacySimulatorData->inputrec->delta_t,
+            legacySimulatorData->inputRec_->delta_t,
             statePropagatorData,
             builderHelper->simulationData<MttkData>(MttkData::dataID()).value()));
 }

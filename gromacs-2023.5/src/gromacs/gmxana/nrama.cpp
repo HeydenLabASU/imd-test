@@ -35,12 +35,18 @@
 
 #include "nrama.h"
 
+#include <cstdio>
 #include <cstring>
 
 #include <algorithm>
+#include <filesystem>
+#include <string>
 
 #include "gromacs/listed_forces/bonded.h"
 #include "gromacs/pbcutil/rmpbc.h"
+#include "gromacs/topology/atoms.h"
+#include "gromacs/topology/idef.h"
+#include "gromacs/topology/ifunc.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/smalloc.h"
@@ -73,7 +79,7 @@ static void calc_dihs(t_xrama* xr)
     gmx_rmpbc_t gpbc = nullptr;
 
     gpbc = gmx_rmpbc_init(xr->idef, xr->pbcType, xr->natoms);
-    gmx_rmpbc(gpbc, xr->natoms, xr->box, xr->x);
+    gmx_rmpbc_apply(gpbc, xr->natoms, xr->box, xr->x);
     gmx_rmpbc_done(gpbc);
 
     for (i = 0; (i < xr->ndih); i++)

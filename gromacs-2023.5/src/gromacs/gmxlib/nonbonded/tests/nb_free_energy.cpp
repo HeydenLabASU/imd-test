@@ -50,7 +50,16 @@
 
 #include "gromacs/gmxlib/nonbonded/nb_free_energy.h"
 
+#include "config.h"
+
 #include <cmath>
+
+#include <iterator>
+#include <memory>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -68,6 +77,7 @@
 #include "gromacs/mdtypes/forcerec.h"
 #include "gromacs/mdtypes/inputrec.h"
 #include "gromacs/mdtypes/interaction_const.h"
+#include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/mdatom.h"
 #include "gromacs/mdtypes/nblist.h"
 #include "gromacs/pbcutil/ishift.h"
@@ -75,8 +85,11 @@
 #include "gromacs/tables/forcetable.h"
 #include "gromacs/topology/forcefieldparameters.h"
 #include "gromacs/topology/idef.h"
+#include "gromacs/topology/ifunc.h"
 #include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/enumerationhelpers.h"
+#include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/strconvert.h"
 #include "gromacs/utility/stringstream.h"
@@ -517,6 +530,17 @@ std::vector<PaddedVector<RVec>> c_coordinates = {
     { { 1.0, 1.0, 1.0 }, { 1.1, 1.15, 1.2 }, { 0.9, 0.85, 0.8 }, { 1.1, 1.15, 0.8 } }
 };
 
+/*! \brief Coordinates for testing with near atomic overlap
+ *
+ * The distance between atoms 0 and 1 is set up such that the LJ-PME
+ * exclusion correction, in combination with the parameters used,
+ * uses the full expression in double precision and the approximation
+ * in single precision, so these are both checked.
+ */
+std::vector<PaddedVector<RVec>> c_coordinatesShortDistance = {
+    { { 1.0, 1.0, 1.0 }, { 1.014, 1.005, 1.008 }, { 0.9, 0.85, 0.8 }, { 1.1, 1.15, 0.8 } }
+};
+
 INSTANTIATE_TEST_SUITE_P(NBInteraction,
                          NonbondedFepTest,
                          ::testing::Combine(::testing::ValuesIn(c_softcoreType),
@@ -525,6 +549,16 @@ INSTANTIATE_TEST_SUITE_P(NBInteraction,
                                             ::testing::ValuesIn(c_fepLambdas),
                                             ::testing::ValuesIn(c_softcoreBeutlerAlphaOrGapsysLinpointScaling),
                                             ::testing::ValuesIn(c_softcoreCoulomb)));
+
+// Tests whether nearly overlapping atoms are handled correctly
+INSTANTIATE_TEST_SUITE_P(NBInteractionShortDistance,
+                         NonbondedFepTest,
+                         ::testing::Combine(::testing::ValuesIn(c_softcoreType),
+                                            ::testing::ValuesIn(c_interaction),
+                                            ::testing::ValuesIn(c_coordinatesShortDistance),
+                                            ::testing::Values(1.0),
+                                            ::testing::Values(0.3),
+                                            ::testing::Values(true)));
 
 } // namespace
 

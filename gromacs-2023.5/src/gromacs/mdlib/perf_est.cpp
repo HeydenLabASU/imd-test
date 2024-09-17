@@ -36,6 +36,9 @@
 #include "perf_est.h"
 
 #include <cmath>
+#include <cstdio>
+
+#include <vector>
 
 #include "gromacs/math/functions.h"
 #include "gromacs/math/units.h"
@@ -46,9 +49,15 @@
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/nbnxm/nbnxm_geometry.h"
 #include "gromacs/simd/simd.h"
+#include "gromacs/topology/atoms.h"
+#include "gromacs/topology/forcefieldparameters.h"
+#include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/listoflists.h"
+#include "gromacs/utility/real.h"
 
 /* Computational cost of bonded, non-bonded and PME calculations.
  * This will be machine dependent.
@@ -266,7 +275,6 @@ static void pp_verlet_load(const gmx_mtop_t& mtop,
     real     r_eff;
     double   c_qlj, c_q, c_lj;
     double   nppa;
-    int      j_cluster_size;
     /* Conversion factor for reference vs SIMD kernel performance.
      * The factor is about right for SSE2/4, but should be 2 higher for AVX256.
      */
@@ -318,17 +326,8 @@ static void pp_verlet_load(const gmx_mtop_t& mtop,
     *nq_tot  = nqlj + nq;
     *nlj_tot = nqlj + nlj;
 
-    /* Effective cut-off for cluster pair list of 4x4 or 4x8 atoms.
-     * This choice should match the one of pick_nbnxn_kernel_cpu().
-     * TODO: Make this function use pick_nbnxn_kernel_cpu().
-     */
-#if GMX_SIMD_HAVE_REAL \
-        && ((GMX_SIMD_REAL_WIDTH == 8 && defined GMX_SIMD_HAVE_FMA) || GMX_SIMD_REAL_WIDTH > 8)
-    j_cluster_size = 8;
-#else
-    j_cluster_size                 = 4;
-#endif
-    r_eff = ir.rlist + nbnxn_get_rlist_effective_inc(j_cluster_size, mtop.natoms / det(box));
+    /* Effective radius of a CPU pairlist including the pairs beyond rlist */
+    r_eff = ir.rlist + gmx::nbnxmPairlistVolumeRadiusIncrease(false, mtop.natoms / det(box));
 
     /* The average number of pairs per atom */
     nppa = 0.5 * 4 / 3 * M_PI * r_eff * r_eff * r_eff * mtop.natoms / det(box);

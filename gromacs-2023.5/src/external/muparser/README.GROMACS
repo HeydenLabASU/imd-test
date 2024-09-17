@@ -13,3 +13,9 @@ causing warnings.
 
 target_include_directories() is used so that GROMACS source files
 find the muparser headers.
+
+As a workaround to support nvc++ compiler, ParserBase::Eval() openmp
+schedule static max chunk size is computed prior to pragma omp parallel.
+
+Disabled compilation of muparser test code, because it produces
+warnings with MSVC.

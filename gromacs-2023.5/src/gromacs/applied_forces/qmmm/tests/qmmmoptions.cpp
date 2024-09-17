@@ -42,16 +42,20 @@
 
 #include "gromacs/applied_forces/qmmm/qmmmoptions.h"
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "gromacs/applied_forces/qmmm/qmmmtypes.h"
 #include "gromacs/mdrunutility/mdmodulesnotifiers.h"
 #include "gromacs/options/options.h"
 #include "gromacs/options/treesupport.h"
 #include "gromacs/selection/indexutil.h"
 #include "gromacs/topology/index.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/keyvaluetree.h"
 #include "gromacs/utility/keyvaluetreebuilder.h"
 #include "gromacs/utility/keyvaluetreemdpwriter.h"
 #include "gromacs/utility/keyvaluetreetransform.h"
@@ -297,7 +301,7 @@ TEST_F(QMMMOptionsTest, CP2KInputProcessing)
 
     // Path to the sample CP2K input file
     std::string cp2kInput =
-            gmx::test::TestFileManager::getInputFilePath("sample_cp2k_input.inp").u8string();
+            gmx::test::TestFileManager::getInputFilePath("sample_cp2k_input.inp").string();
 
     // Process input file
     qmmmOptions_.setQMExternalInputFile({ true, cp2kInput });

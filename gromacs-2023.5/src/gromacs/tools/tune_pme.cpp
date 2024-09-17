@@ -37,14 +37,25 @@
 
 #include "config.h"
 
+#include <cinttypes>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 
 #include <algorithm>
+#include <filesystem>
 #include <numeric>
 #include <string>
+
+#include "gromacs/commandline/filenm.h"
+#include "gromacs/fileio/filetypes.h"
+#include "gromacs/fileio/oenv.h"
+#include "gromacs/math/functions.h"
+#include "gromacs/math/vectypes.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/real.h"
 
 #ifdef HAVE_SYS_TIME_H
 #    include <sys/time.h>
@@ -75,6 +86,8 @@
 #include "gromacs/utility/path.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/stringutil.h"
+
+struct gmx_output_env_t;
 
 /* Enum for situations that can occur during log file parsing, the
  * corresponding string entries can be found in do_the_tests() in
@@ -688,11 +701,12 @@ static void check_mdrun_works(gmx_bool    bThreads,
     FILE*      fp;
     const char filename[] = "benchtest.log";
 
-    /* This string should always be identical to the one in copyrite.c,
-     * gmx_print_version_info() in the GMX_MPI section */
-    const char match_mpi[]     = "MPI library:        MPI";
+    /* This string should always be identical to the one in
+     * utility/binaryinformation.cpp gmx_print_version_info()
+     * in the GMX_MPI section */
+    const char match_mpi[]     = "MPI library:         MPI";
     const char match_mdrun[]   = "Executable: ";
-    const char match_nogpu[]   = "GPU support:        disabled";
+    const char match_nogpu[]   = "GPU support:         disabled";
     gmx_bool   bMdrun          = FALSE;
     gmx_bool   bMPI            = FALSE;
     gmx_bool   bHaveGpuSupport = TRUE;
@@ -1140,7 +1154,7 @@ static void make_benchmark_tprs(const char* fn_sim_tpr,  /* READ : User-provided
         /* Write the benchmark tpr file */
         fn_bench_tprs[j] =
                 gmx_strdup(gmx::concatenateBeforeExtension(fn_sim_tpr, gmx::formatString("_bench%.2d", j))
-                                   .u8string()
+                                   .string()
                                    .c_str());
 
         fprintf(stdout, "Writing benchmark tpr %s with nsteps=", fn_bench_tprs[j]);

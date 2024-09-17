@@ -35,10 +35,22 @@
 
 #include "calc_verletbuf.h"
 
+#include "config.h"
+
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 
 #include <algorithm>
+#include <filesystem>
+#include <functional>
+#include <string>
+#include <tuple>
+#include <typeindex>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "gromacs/ewald/ewald_utils.h"
 #include "gromacs/gmxlib/network.h"
@@ -49,11 +61,18 @@
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/multipletimestepping.h"
 #include "gromacs/nbnxm/nbnxm.h"
+#include "gromacs/nbnxm/nbnxm_enums.h"
 #include "gromacs/nbnxm/nbnxm_geometry.h"
 #include "gromacs/nbnxm/nbnxm_simd.h"
+#include "gromacs/pbcutil/pbc.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/block.h"
+#include "gromacs/topology/forcefieldparameters.h"
+#include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/topology/topology_enums.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/real.h"
 #include "gromacs/utility/strconvert.h"
@@ -93,15 +112,14 @@
  * due to cancellation of positive and negative drift for different pairs.
  */
 
-
 /* Struct for unique atom type for calculating the energy drift.
  * The atom displacement depends on mass and constraints.
  * The energy jump for given distance depend on LJ type and q.
  */
 struct VerletbufAtomtype
 {
-    atom_nonbonded_kinetic_prop_t prop; /* non-bonded and kinetic atom prop. */
-    int                           n;    /* #atoms of this type in the system */
+    AtomNonbondedAndKineticProperties prop; /* non-bonded and kinetic atom prop. */
+    int                               n;    /* #atoms of this type in the system */
 };
 
 // Struct for derivatives of a non-bonded interaction potential
@@ -113,20 +131,25 @@ struct pot_derivatives_t
     real md3; // -V''' at the cutoff
 };
 
-VerletbufListSetup verletbufGetListSetup(Nbnxm::KernelType nbnxnKernelType)
+VerletbufListSetup verletbufGetListSetup(gmx::NbnxmKernelType nbnxnKernelType)
 {
     /* Note that the current buffer estimation code only handles clusters
      * of size 1, 2 or 4, so for 4x8 or 8x8 we use the estimate for 4x4.
      */
     VerletbufListSetup listSetup;
 
-    listSetup.cluster_size_i = Nbnxm::IClusterSizePerKernelType[nbnxnKernelType];
-    listSetup.cluster_size_j = Nbnxm::JClusterSizePerKernelType[nbnxnKernelType];
-
-    if (!Nbnxm::kernelTypeUsesSimplePairlist(nbnxnKernelType))
+    if (nbnxnKernelType == gmx::NbnxmKernelType::Gpu8x8x8)
     {
-        /* The GPU kernels (except for OpenCL) split the j-clusters in two halves */
-        listSetup.cluster_size_j /= 2;
+        // Use the default GPU 8x8x8 pairlist layout here, as the results are
+        // identical for anything above a cluster size of 4. This is asserted on later
+        // in mdrunner.cpp
+        listSetup.cluster_size_i = gmx::sc_gpuClusterSize(gmx::PairlistType::Hierarchical8x8x8);
+        listSetup.cluster_size_j = gmx::sc_gpuClusterSize(gmx::PairlistType::Hierarchical8x8x8);
+    }
+    else
+    {
+        listSetup.cluster_size_i = sc_iClusterSize(nbnxnKernelType);
+        listSetup.cluster_size_j = sc_jClusterSize(nbnxnKernelType);
     }
 
     return listSetup;
@@ -139,64 +162,30 @@ VerletbufListSetup verletbufGetSafeListSetup(ListSetupType listType)
      * i- and j-cluster sizes, so we potentially overestimate, but never
      * underestimate, the buffer drift.
      */
-    Nbnxm::KernelType nbnxnKernelType;
+    gmx::NbnxmKernelType nbnxnKernelType;
 
     if (listType == ListSetupType::Gpu)
     {
-        nbnxnKernelType = Nbnxm::KernelType::Gpu8x8x8;
+        nbnxnKernelType = gmx::NbnxmKernelType::Gpu8x8x8;
     }
-    else if (GMX_SIMD && listType == ListSetupType::CpuSimdWhenSupported)
+#if GMX_SIMD && GMX_USE_SIMD_KERNELS
+    else if (listType == ListSetupType::CpuSimdWhenSupported)
     {
-#ifdef GMX_NBNXN_SIMD_2XNN
         /* We use the smallest cluster size to be on the safe side */
-        nbnxnKernelType = Nbnxm::KernelType::Cpu4xN_Simd_2xNN;
-#else
-        nbnxnKernelType = Nbnxm::KernelType::Cpu4xN_Simd_4xN;
-#endif
+        nbnxnKernelType = (sc_haveNbnxmSimd2xmmKernels ? gmx::NbnxmKernelType::Cpu4xN_Simd_2xNN
+                                                       : gmx::NbnxmKernelType::Cpu4xN_Simd_4xN);
     }
+#endif
     else
     {
-        nbnxnKernelType = Nbnxm::KernelType::Cpu4x4_PlainC;
+        nbnxnKernelType = gmx::NbnxmKernelType::Cpu4x4_PlainC;
     }
 
     return verletbufGetListSetup(nbnxnKernelType);
 }
 
-// Returns whether prop1 and prop2 are identical
-static bool atom_nonbonded_kinetic_prop_equal(const atom_nonbonded_kinetic_prop_t& prop1,
-                                              const atom_nonbonded_kinetic_prop_t& prop2)
-{
-    return (prop1.mass == prop2.mass && prop1.type == prop2.type && prop1.q == prop2.q
-            && prop1.bConstr == prop2.bConstr && prop1.con_mass == prop2.con_mass
-            && prop1.con_len == prop2.con_len);
-}
-
-static void addAtomtype(std::vector<VerletbufAtomtype>* att, const atom_nonbonded_kinetic_prop_t& prop, int nmol)
-{
-    if (prop.mass == 0)
-    {
-        /* Ignore massless particles */
-        return;
-    }
-
-    size_t i = 0;
-    while (i < att->size() && !atom_nonbonded_kinetic_prop_equal(prop, (*att)[i].prop))
-    {
-        i++;
-    }
-
-    if (i < att->size())
-    {
-        (*att)[i].n += nmol;
-    }
-    else
-    {
-        att->push_back({ prop, nmol });
-    }
-}
-
 /* Returns the mass of atom atomIndex or 1 when setMassesToOne=true */
-static real getMass(const t_atoms& atoms, int atomIndex, bool setMassesToOne)
+static inline real getMass(const t_atoms& atoms, int atomIndex, bool setMassesToOne)
 {
     if (!setMassesToOne)
     {
@@ -331,12 +320,160 @@ static void get_vsite_masses(const gmx_moltype_t&  moltype,
     }
 }
 
+#ifndef DOXYGEN
+
+// Returns a hash for AtomNonbondedAndKineticProperties
+template<>
+struct std::hash<AtomNonbondedAndKineticProperties>
+{
+    std::size_t operator()(const AtomNonbondedAndKineticProperties& p) const noexcept
+    {
+        std::size_t p0 = std::hash<int64_t>{}(p.realBits());
+        std::size_t p1 = std::hash<int>{}(p.type());
+        return p0 ^ (p1 << 1);
+    }
+};
+
+#endif // ifndef DOXYGEN
+
+// Class for computing the RMS and max(abs()) of a list of values and a resolution for the list
+class RmsMax
+{
+public:
+    // Add \p count values, values equal to zero are not added
+    void add(real value, int count)
+    {
+        if (value != 0)
+        {
+            squaredSum_ += count * gmx::square(value);
+            count_ += count;
+            absMax_ = std::max(absMax_, std::abs(value));
+        }
+    }
+
+    // Return the square root of the mean of the squared values
+    real rms() const { return count_ > 0 ? std::sqrt(squaredSum_ / count_) : 0; }
+
+    /* Returns the smallest resolution such that:
+     *   |max value| / resolution does not exceed the maximum that can be stored in T
+     * and:
+     *   resolution >= rms() * requestedResolution
+     */
+    template<typename T>
+    real getResolution(const real requestedResolution) const
+    {
+        // To get the smallest resolution that satisfies both conditions, we need to take
+        // the maximum of the minimum resolution for each condition
+        return std::max(absMax_ / std::numeric_limits<T>::max(), rms() * requestedResolution);
+    }
+
+private:
+    double squaredSum_ = 0;
+    int    count_      = 0;
+    real   absMax_     = 0;
+};
+
+/* Returns the resolutions for 1/mass, charge and constraint length
+ *
+ * The resolutions are set as 0.01 * RMS(values) or higher in case
+ * the maximum value would not fit in an int16_t with that resolution.
+ */
+static AtomNonbondedAndKineticPropertiesResolutions getResolutions(const gmx_mtop_t& mtop,
+                                                                   const bool        setMassesToOne,
+                                                                   const bool        useFep)
+{
+    // Get the range for 1/mass, charge and constraint length for setting the storage resolution
+    RmsMax invMassRmsMax;
+    RmsMax chargeRmsMax;
+    RmsMax constraintLengthRmsMax;
+
+    for (const gmx_molblock_t& molblock : mtop.molblock)
+    {
+        int                  nmol    = molblock.nmol;
+        const gmx_moltype_t& moltype = mtop.moltype[molblock.type];
+        const t_atoms&       atoms   = moltype.atoms;
+
+        for (int a = 0; a < atoms.nr; a++)
+        {
+            real mass = getMass(atoms, a, setMassesToOne);
+            if (mass != 0)
+            {
+                invMassRmsMax.add(1 / mass, nmol);
+            }
+
+            chargeRmsMax.add(atoms.atom[a].q, nmol);
+        }
+
+        for (int ft = F_CONSTR; ft <= F_CONSTRNC; ft++)
+        {
+            const InteractionList& il = moltype.ilist[ft];
+
+            for (int i = 0; i < il.size(); i += 1 + NRAL(ft))
+            {
+                const t_iparams& ip = mtop.ffparams.iparams[il.iatoms[i]];
+                if (!(useFep && ip.constr.dB != ip.constr.dA) && ip.constr.dA != 0)
+                {
+                    constraintLengthRmsMax.add(ip.constr.dA, nmol);
+                }
+            }
+        }
+
+        const InteractionList& il = moltype.ilist[F_SETTLE];
+
+        for (int i = 0; i < il.size(); i += 1 + NRAL(F_SETTLE))
+        {
+            const t_iparams& ip = mtop.ffparams.iparams[il.iatoms[i]];
+
+            constraintLengthRmsMax.add(ip.settle.doh, nmol * 2);
+        }
+    }
+
+    // The resolution of 1/mass, charge and constraint length.
+    // 100 values per RMS value is a reasonable compromise between accuracy and limiting
+    // the number of different types.
+    const real c_resolution = 0.01_real;
+
+    AtomNonbondedAndKineticPropertiesResolutions resolutions;
+
+    resolutions.invMassResolution = invMassRmsMax.getResolution<int16_t>(c_resolution);
+
+    resolutions.chargeResolution = chargeRmsMax.getResolution<int16_t>(c_resolution);
+
+    resolutions.constraintLengthResolution = constraintLengthRmsMax.getResolution<int16_t>(c_resolution);
+
+    GMX_RELEASE_ASSERT(resolutions.invMassResolution != 0,
+                       "We should have a least one non-zero mass");
+
+    // All charges could be zero, avoid division by zero for that case
+    if (resolutions.chargeResolution == 0)
+    {
+        resolutions.chargeResolution = 1;
+    }
+    // Note that with all constraint lengths zero, constraints are not added, so resolution can be zero
+
+    return resolutions;
+}
+
 static std::vector<VerletbufAtomtype> getVerletBufferAtomtypes(const gmx_mtop_t& mtop,
                                                                const bool        setMassesToOne,
                                                                const bool        useFep)
 {
-    std::vector<VerletbufAtomtype> att;
-    int                            ft, i, a1, a2, a3, a;
+    // Get the resolution for 1/mass, charge and constraint length
+    const auto resolutions = getResolutions(mtop, setMassesToOne, useFep);
+
+    if (debug)
+    {
+        fprintf(debug,
+                "Verlet type resolutions: 1/mass: %f charge %f constraint length %f\n",
+                resolutions.invMassResolution,
+                resolutions.chargeResolution,
+                resolutions.constraintLengthResolution);
+    }
+
+    // We use an unorded map to generate the list of types to avoid O(N^2) cost
+    std::unordered_map<AtomNonbondedAndKineticProperties, int> map;
+
+    auto mapIt = map.end();
 
     for (const gmx_molblock_t& molblock : mtop.molblock)
     {
@@ -350,13 +487,14 @@ static std::vector<VerletbufAtomtype> getVerletBufferAtomtypes(const gmx_mtop_t&
          * Thus we need a list of properties for all atoms which
          * we partially fill when looping over constraints.
          */
-        std::vector<atom_nonbonded_kinetic_prop_t> prop(atoms->nr);
+        std::vector<AtomNonbondedAndKineticProperties> prop(
+                atoms->nr, AtomNonbondedAndKineticProperties(resolutions));
 
-        for (ft = F_CONSTR; ft <= F_CONSTRNC; ft++)
+        for (int ft = F_CONSTR; ft <= F_CONSTRNC; ft++)
         {
             const InteractionList& il = moltype.ilist[ft];
 
-            for (i = 0; i < il.size(); i += 1 + NRAL(ft))
+            for (int i = 0; i < il.size(); i += 1 + NRAL(ft))
             {
                 const t_iparams& ip = mtop.ffparams.iparams[il.iatoms[i]];
                 /* When using free-energy perturbation constraint can be perturbed.
@@ -380,72 +518,68 @@ static std::vector<VerletbufAtomtype> getVerletBufferAtomtypes(const gmx_mtop_t&
                 GMX_RELEASE_ASSERT(ip.constr.dA > 0,
                                    "We should only have positive constraint lengths here");
 
-                a1         = il.iatoms[i + 1];
-                a2         = il.iatoms[i + 2];
+                int  a1    = il.iatoms[i + 1];
+                int  a2    = il.iatoms[i + 2];
                 real mass1 = getMass(*atoms, a1, setMassesToOne);
                 real mass2 = getMass(*atoms, a2, setMassesToOne);
-                if (mass2 > prop[a1].con_mass)
-                {
-                    prop[a1].con_mass = mass2;
-                    prop[a1].con_len  = ip.constr.dA;
-                }
-                if (mass1 > prop[a2].con_mass)
-                {
-                    prop[a2].con_mass = mass1;
-                    prop[a2].con_len  = ip.constr.dA;
-                }
+                prop[a1].addConstraint(mass2, ip.constr.dA);
+                prop[a2].addConstraint(mass1, ip.constr.dA);
             }
         }
 
         const InteractionList& il = moltype.ilist[F_SETTLE];
 
-        for (i = 0; i < il.size(); i += 1 + NRAL(F_SETTLE))
+        for (int i = 0; i < il.size(); i += 1 + NRAL(F_SETTLE))
         {
             const t_iparams* ip = &mtop.ffparams.iparams[il.iatoms[i]];
 
-            a1 = il.iatoms[i + 1];
-            a2 = il.iatoms[i + 2];
-            a3 = il.iatoms[i + 3];
+            int a1 = il.iatoms[i + 1];
+            int a2 = il.iatoms[i + 2];
+            int a3 = il.iatoms[i + 3];
             /* Usually the mass of a1 (usually oxygen) is larger than a2/a3.
              * If this is not the case, we overestimate the displacement,
              * which leads to a larger buffer (ok since this is an exotic case).
              */
-            prop[a1].con_mass = getMass(*atoms, a2, setMassesToOne);
-            prop[a1].con_len  = ip->settle.doh;
+            prop[a1].addConstraint(getMass(*atoms, a2, setMassesToOne), ip->settle.doh);
 
-            prop[a2].con_mass = getMass(*atoms, a1, setMassesToOne);
-            prop[a2].con_len  = ip->settle.doh;
+            prop[a2].addConstraint(getMass(*atoms, a1, setMassesToOne), ip->settle.doh);
 
-            prop[a3].con_mass = getMass(*atoms, a1, setMassesToOne);
-            prop[a3].con_len  = ip->settle.doh;
+            prop[a3].addConstraint(getMass(*atoms, a1, setMassesToOne), ip->settle.doh);
         }
 
         std::vector<real> vsite_m(atoms->nr);
         get_vsite_masses(moltype, mtop.ffparams, setMassesToOne, vsite_m);
 
-        for (a = 0; a < atoms->nr; a++)
+        for (int a = 0; a < atoms->nr; a++)
         {
+            real mass;
             if (atoms->atom[a].ptype == ParticleType::VSite)
             {
-                prop[a].mass = vsite_m[a];
+                mass = vsite_m[a];
             }
             else
             {
-                prop[a].mass = getMass(*atoms, a, setMassesToOne);
+                mass = getMass(*atoms, a, setMassesToOne);
             }
-            prop[a].type = atoms->atom[a].type;
-            prop[a].q    = atoms->atom[a].q;
-            /* We consider an atom constrained, #DOF=2, when it is
-             * connected with constraints to (at least one) atom with
-             * a mass of more than 0.4x its own mass. This is not a critical
-             * parameter, since with roughly equal masses the unconstrained
-             * and constrained displacement will not differ much (and both
-             * overestimate the displacement).
-             */
-            prop[a].bConstr = (prop[a].con_mass > 0.4 * prop[a].mass);
 
-            addAtomtype(&att, prop[a], nmol);
+            // Ignore atoms with zero mass
+            if (mass != 0)
+            {
+                prop[a].setMassTypeCharge(mass, atoms->atom[a].type, atoms->atom[a].q);
+
+                mapIt = map.insert(mapIt, { prop[a], 0 });
+                mapIt->second += nmol;
+            }
         }
+    }
+
+
+    // Pack the types into a vector for fast sequential access
+    std::vector<VerletbufAtomtype> att;
+    att.reserve(map.size());
+    for (const auto& atomtype : map)
+    {
+        att.push_back({ atomtype.first, atomtype.second });
     }
 
     if (gmx_debug_at)
@@ -455,12 +589,12 @@ static std::vector<VerletbufAtomtype> getVerletBufferAtomtypes(const gmx_mtop_t&
             fprintf(debug,
                     "type %zu: m %5.2f t %d q %6.3f con %s con_m %5.3f con_l %5.3f n %d\n",
                     a,
-                    att[a].prop.mass,
-                    att[a].prop.type,
-                    att[a].prop.q,
-                    gmx::boolToString(att[a].prop.bConstr),
-                    att[a].prop.con_mass,
-                    att[a].prop.con_len,
+                    1 / att[a].prop.invMass(),
+                    att[a].prop.type(),
+                    att[a].prop.charge(),
+                    gmx::boolToString(att[a].prop.hasConstraint()),
+                    1 / att[a].prop.constraintInvMass(),
+                    att[a].prop.constraintLength(),
                     att[a].n);
         }
     }
@@ -479,18 +613,24 @@ static std::vector<VerletbufAtomtype> getVerletBufferAtomtypes(const gmx_mtop_t&
  * into account. If an atom has multiple constraints, this will result in
  * an overestimate of the displacement, which gives a larger drift and buffer.
  */
-void constrained_atom_sigma2(real kT_fac, const atom_nonbonded_kinetic_prop_t* prop, real* sigma2_2d, real* sigma2_3d)
+void constrained_atom_sigma2(real                                     kT_fac,
+                             const AtomNonbondedAndKineticProperties& prop,
+                             real*                                    sigma2_2d,
+                             real*                                    sigma2_3d)
 {
+    GMX_ASSERT(prop.hasConstraint(), "Expect only constrained atoms here");
+
     /* Here we decompose the motion of a constrained atom into two
      * components: rotation around the COM and translation of the COM.
      */
 
     /* Determine the variance of the arc length for the two rotational DOFs */
-    real massFraction = prop->con_mass / (prop->mass + prop->con_mass);
-    real sigma2_rot   = kT_fac * massFraction / prop->mass;
+    real massFraction =
+            1 / (prop.constraintInvMass() * (1 / prop.invMass() + 1 / prop.constraintInvMass()));
+    real sigma2_rot = kT_fac * massFraction * prop.invMass();
 
     /* The distance from the atom to the COM, i.e. the rotational arm */
-    real comDistance = prop->con_len * massFraction;
+    real comDistance = prop.constraintLength() * massFraction;
 
     /* The variance relative to the arm */
     real sigma2_rel = sigma2_rot / gmx::square(comDistance);
@@ -517,7 +657,7 @@ void constrained_atom_sigma2(real kT_fac, const atom_nonbonded_kinetic_prop_t* p
      * overestimate of the buffer size, since the Gaussian has a long tail,
      * whereas the actual distribution can not reach values larger than 2.
      */
-    /* Coeffients obtained from a Taylor expansion */
+    /* Coefficients obtained from a Taylor expansion */
     const real a = 1.0 / 3.0;
     const real b = 2.0 / 45.0;
 
@@ -529,12 +669,12 @@ void constrained_atom_sigma2(real kT_fac, const atom_nonbonded_kinetic_prop_t* p
             gmx::square(comDistance) * sigma2_rel / (1 + a * sigma2_rel + b * gmx::square(sigma2_rel));
 
     /* The constrained atom also moves (in 3D) with the COM of both atoms */
-    *sigma2_3d = kT_fac / (prop->mass + prop->con_mass);
+    *sigma2_3d = kT_fac / (1 / prop.invMass() + 1 / prop.constraintInvMass());
 }
 
-static void get_atom_sigma2(real kT_fac, const atom_nonbonded_kinetic_prop_t* prop, real* sigma2_2d, real* sigma2_3d)
+static void get_atom_sigma2(real kT_fac, const AtomNonbondedAndKineticProperties& prop, real* sigma2_2d, real* sigma2_3d)
 {
-    if (prop->bConstr)
+    if (prop.hasConstraint())
     {
         /* Complicated constraint calculation in a separate function */
         constrained_atom_sigma2(kT_fac, prop, sigma2_2d, sigma2_3d);
@@ -543,7 +683,7 @@ static void get_atom_sigma2(real kT_fac, const atom_nonbonded_kinetic_prop_t* pr
     {
         /* Unconstrained atom: trivial */
         *sigma2_2d = 0;
-        *sigma2_3d = kT_fac / prop->mass;
+        *sigma2_3d = kT_fac * prop.invMass();
     }
 }
 
@@ -671,26 +811,26 @@ static real energyDrift(gmx::ArrayRef<const VerletbufAtomtype> att,
 
     // Here add up the contribution of all atom pairs in the system to
     // (estimated) energy drift by looping over all atom type pairs.
-    for (gmx::index i = 0; i < att.ssize(); i++)
+    for (gmx::Index i = 0; i < att.ssize(); i++)
     {
         // Get the thermal displacement variance for the i-atom type
-        const atom_nonbonded_kinetic_prop_t* prop_i = &att[i].prop;
-        real                                 s2i_2d, s2i_3d;
-        get_atom_sigma2(kT_fac, prop_i, &s2i_2d, &s2i_3d);
+        const AtomNonbondedAndKineticProperties& propI = att[i].prop;
+        real                                     s2i_2d, s2i_3d;
+        get_atom_sigma2(kT_fac, propI, &s2i_2d, &s2i_3d);
 
-        for (gmx::index j = i; j < att.ssize(); j++)
+        for (gmx::Index j = i; j < att.ssize(); j++)
         {
             // Get the thermal displacement variance for the j-atom type
-            const atom_nonbonded_kinetic_prop_t* prop_j = &att[j].prop;
-            real                                 s2j_2d, s2j_3d;
-            get_atom_sigma2(kT_fac, prop_j, &s2j_2d, &s2j_3d);
+            const AtomNonbondedAndKineticProperties& propJ = att[j].prop;
+            real                                     s2j_2d, s2j_3d;
+            get_atom_sigma2(kT_fac, propJ, &s2j_2d, &s2j_3d);
 
             /* Add up the up to four independent variances */
             real s2 = s2i_2d + s2i_3d + s2j_2d + s2j_3d;
 
             // Set V, -V', V'' and -V''' at the cut-off for LJ
-            real              c6  = ffp->iparams[prop_i->type * ffp->atnr + prop_j->type].lj.c6;
-            real              c12 = ffp->iparams[prop_i->type * ffp->atnr + prop_j->type].lj.c12;
+            real              c6  = ffp->iparams[propI.type() * ffp->atnr + propJ.type()].lj.c6;
+            real              c12 = ffp->iparams[propI.type() * ffp->atnr + propJ.type()].lj.c12;
             pot_derivatives_t lj;
             lj.pot = c6 * ljDisp.pot + c12 * ljRep.pot;
             lj.md1 = c6 * ljDisp.md1 + c12 * ljRep.md1;
@@ -698,17 +838,17 @@ static real energyDrift(gmx::ArrayRef<const VerletbufAtomtype> att,
             lj.md3 = c6 * ljDisp.md3 + c12 * ljRep.md3;
 
             real pot_lj = energyDriftAtomPair(
-                    prop_i->bConstr, prop_j->bConstr, s2, s2i_2d, s2j_2d, rlist - rlj, &lj);
+                    propI.hasConstraint(), propJ.hasConstraint(), s2, s2i_2d, s2j_2d, rlist - rlj, &lj);
 
             // Set -V' and V'' at the cut-off for Coulomb
             pot_derivatives_t elec_qq;
-            elec_qq.pot = elec.pot * prop_i->q * prop_j->q;
-            elec_qq.md1 = elec.md1 * prop_i->q * prop_j->q;
-            elec_qq.d2  = elec.d2 * prop_i->q * prop_j->q;
+            elec_qq.pot = elec.pot * propI.charge() * propJ.charge();
+            elec_qq.md1 = elec.md1 * propI.charge() * propJ.charge();
+            elec_qq.d2  = elec.d2 * propI.charge() * propJ.charge();
             elec_qq.md3 = 0;
 
             real pot_q = energyDriftAtomPair(
-                    prop_i->bConstr, prop_j->bConstr, s2, s2i_2d, s2j_2d, rlist - rcoulomb, &elec_qq);
+                    propI.hasConstraint(), propJ.hasConstraint(), s2, s2i_2d, s2j_2d, rlist - rcoulomb, &elec_qq);
 
             // Note that attractive and repulsive potentials for individual
             // pairs can partially cancel.
@@ -732,6 +872,8 @@ static real energyDrift(gmx::ArrayRef<const VerletbufAtomtype> att,
             drift_tot += std::abs(pot);
         }
     }
+
+    GMX_RELEASE_ASSERT(std::isfinite(drift_tot), "The drift estimate should be a finite value");
 
     return drift_tot;
 }
@@ -799,10 +941,10 @@ static real md3_force_switch(real p, real rswitch, real rc)
     real a, b;
     real md3_pot, md3_sw;
 
-    a = -((p + 4) * rc - (p + 1) * rswitch) / (pow(rc, p + 2) * gmx::square(rc - rswitch));
-    b = ((p + 3) * rc - (p + 1) * rswitch) / (pow(rc, p + 2) * gmx::power3(rc - rswitch));
+    a = -((p + 4) * rc - (p + 1) * rswitch) / (std::pow(rc, p + 2) * gmx::square(rc - rswitch));
+    b = ((p + 3) * rc - (p + 1) * rswitch) / (std::pow(rc, p + 2) * gmx::power3(rc - rswitch));
 
-    md3_pot = (p + 2) * (p + 1) * p * pow(rc, p + 3);
+    md3_pot = (p + 2) * (p + 1) * p * std::pow(rc, p + 3);
     md3_sw  = 2 * a + 6 * b * (rc - rswitch);
 
     return md3_pot + md3_sw;
@@ -861,7 +1003,7 @@ static std::pair<pot_derivatives_t, pot_derivatives_t> getVdwDerivatives(const t
         // -dV/dr of g(br)*r^-6 [where g(x) = exp(-x^2)(1+x^2+x^4/2),
         // see LJ-PME equations in manual] and r^-reppow
         ljDisp.md1 = -std::exp(-br2) * (br6 + 3.0 * br4 + 6.0 * br2 + 6.0) * std::pow(r, -7.0);
-        ljRep.md1  = repPow * pow(r, -(repPow + 1));
+        ljRep.md1  = repPow * std::pow(r, -(repPow + 1));
         // The contribution of the higher derivatives is negligible
     }
     else
@@ -980,13 +1122,13 @@ static real displacementVariance(const t_inputrec& ir, real temperature, real ti
 static real maxSigma(real kT_fac, gmx::ArrayRef<const VerletbufAtomtype> att)
 {
     GMX_ASSERT(!att.empty(), "We should have at least one type");
-    real smallestMass = att[0].prop.mass;
+    real maxInvMass = att[0].prop.invMass();
     for (const auto& atomType : att)
     {
-        smallestMass = std::min(smallestMass, atomType.prop.mass);
+        maxInvMass = std::max(maxInvMass, atomType.prop.invMass());
     }
 
-    return 2 * std::sqrt(kT_fac / smallestMass);
+    return 2 * std::sqrt(kT_fac * maxInvMass);
 }
 
 /* Returns the density weighted over cells weighted by the atom count per cell */
@@ -995,6 +1137,8 @@ static real computeEffectiveAtomDensity(gmx::ArrayRef<const gmx::RVec> coordinat
                                         const real                     cutoff)
 {
     GMX_RELEASE_ASSERT(!coordinates.empty(), "Need coordinates to compute a density");
+    GMX_RELEASE_ASSERT(cutoff > 0,
+                       "The cutoff must be > 0 when computing the effective atom density");
 
     gmx::IVec numCells;
     gmx::RVec invCellSize;
@@ -1002,7 +1146,7 @@ static real computeEffectiveAtomDensity(gmx::ArrayRef<const gmx::RVec> coordinat
     for (int d = 0; d < DIM; d++)
     {
         GMX_RELEASE_ASSERT(cutoff < box[d][d], "The cutoff should be smaller than the boxsize");
-        numCells[d]    = int(lround(box[d][d] / cutoff));
+        numCells[d]    = int(std::lround(box[d][d] / cutoff));
         invCellSize[d] = numCells[d] / box[d][d];
     }
 
@@ -1457,15 +1601,15 @@ static real chanceOfAtomCrossingCell(gmx::ArrayRef<const VerletbufAtomtype> atom
     real chance = 0;
     for (const VerletbufAtomtype& att : atomtypes)
     {
-        const atom_nonbonded_kinetic_prop_t& propAtom = att.prop;
-        real                                 s2_2d;
-        real                                 s2_3d;
-        get_atom_sigma2(kT_fac, &propAtom, &s2_2d, &s2_3d);
+        const AtomNonbondedAndKineticProperties& propAtom = att.prop;
+        real                                     s2_2d;
+        real                                     s2_3d;
+        get_atom_sigma2(kT_fac, propAtom, &s2_2d, &s2_3d);
 
         real chancePerAtom = energyDriftAtomPair(
-                propAtom.bConstr, false, s2_2d + s2_3d, s2_2d, 0, cellSize, &boundaryInteraction);
+                propAtom.hasConstraint(), false, s2_2d + s2_3d, s2_2d, 0, cellSize, &boundaryInteraction);
 
-        if (propAtom.bConstr)
+        if (propAtom.hasConstraint())
         {
             /* energyDriftAtomPair() uses an unlimited Gaussian displacement
              * distribution for constrained atoms, whereas they can
@@ -1474,8 +1618,10 @@ static real chanceOfAtomCrossingCell(gmx::ArrayRef<const VerletbufAtomtype> atom
              * Use this maximum, limited displacement when this results in
              * a smaller chance (note that this is still an overestimate).
              */
-            real massFraction = propAtom.con_mass / (propAtom.mass + propAtom.con_mass);
-            real comDistance  = propAtom.con_len * massFraction;
+            real massFraction = 1
+                                / (propAtom.constraintInvMass()
+                                   * (1 / propAtom.invMass() + 1 / propAtom.constraintInvMass()));
+            real comDistance = propAtom.constraintLength() * massFraction;
 
             real chanceWithMaxDistance = energyDriftAtomPair(
                     false, false, s2_3d, 0, 0, cellSize - 2 * comDistance, &boundaryInteraction);

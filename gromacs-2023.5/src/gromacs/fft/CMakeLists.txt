@@ -79,6 +79,37 @@ if (GMX_GPU_CUDA)
             gpu_3dfft_cufftmp.cpp
         )
     endif()
+elseif (GMX_GPU_HIP)
+    if (GMX_GPU_FFT_VKFFT)
+        gmx_add_libgromacs_sources(
+            # HIP-specific sources
+            gpu_3dfft_hip_vkfft.cpp
+            gpu_3dfft_impl.cpp
+            gpu_3dfft.cpp
+            )
+    _gmx_add_files_to_property(HIP_SOURCES
+        # Must add these files so they can include hip_runtime.h
+        gpu_3dfft_hip_vkfft.cpp
+        )
+    elseif(GMX_GPU_FFT_ROCFFT)
+        gmx_add_libgromacs_sources(
+            # HIP-specific sources
+            gpu_3dfft_hip_rocfft.cpp
+            gpu_3dfft_impl.cpp
+            gpu_3dfft.cpp
+            rocfft_common_utils.cpp 
+            )
+    _gmx_add_files_to_property(HIP_SOURCES
+        # Must add these files so they can include hip_runtime.h
+        gpu_3dfft_hip_rocfft.cpp
+        rocfft_common_utils.cpp 
+        )
+    endif()
+    _gmx_add_files_to_property(HIP_SOURCES
+        # Must add these files so they can include hip_runtime.h
+        gpu_3dfft.cpp
+        gpu_3dfft_impl.cpp
+        )
 elseif (GMX_GPU_OPENCL)
     if (GMX_GPU_FFT_VKFFT)
         gmx_add_libgromacs_sources(
@@ -95,12 +126,12 @@ elseif (GMX_GPU_OPENCL)
     endif()
 elseif (GMX_GPU_SYCL)
     set(_sycl_fft_sources gpu_3dfft.cpp gpu_3dfft_impl.cpp gpu_3dfft_sycl.cpp)
-    if (GMX_GPU_FFT_MKL)
+    if (GMX_GPU_FFT_MKL OR GMX_GPU_FFT_ONEMKL)
         list(APPEND _sycl_fft_sources gpu_3dfft_sycl_mkl.cpp)
-    elseif(GMX_GPU_FFT_DBFFT)
-        list(APPEND _sycl_fft_sources gpu_3dfft_sycl_dbfft.cpp)
+    elseif(GMX_GPU_FFT_BBFFT)
+        list(APPEND _sycl_fft_sources gpu_3dfft_sycl_bbfft.cpp)
     elseif(GMX_GPU_FFT_ROCFFT)
-        list(APPEND _sycl_fft_sources gpu_3dfft_sycl_rocfft.cpp)
+        list(APPEND _sycl_fft_sources gpu_3dfft_sycl_rocfft.cpp rocfft_common_utils.cpp)
     elseif(GMX_GPU_FFT_VKFFT)
         list(APPEND _sycl_fft_sources gpu_3dfft_sycl_vkfft.cpp)
     endif()
@@ -118,8 +149,7 @@ target_link_libraries(fft PRIVATE
 
 # Public interface for modules, including dependencies and interfaces
 #target_include_directories(fft PUBLIC
-target_include_directories(fft INTERFACE
-                           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+#                           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 #target_link_libraries(fft PUBLIC
 target_link_libraries(fft INTERFACE
                       legacy_api
@@ -129,8 +159,11 @@ target_link_libraries(fft INTERFACE
                       utility
                       )
 
-if (GMX_GPU_FFT_DBFFT)
+if (GMX_GPU_FFT_BBFFT)
     target_link_libraries(fft INTERFACE bbfft::bbfft-sycl)
+endif()
+if (GMX_GPU_FFT_VKFFT)
+    target_link_libraries(fft INTERFACE VkFFT)
 endif()
 
 # TODO: when fft is an OBJECT target

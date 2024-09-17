@@ -42,12 +42,31 @@
 
 #include "gmxpre.h"
 
+#include <cmath>
+#include <cstddef>
+
+#include <algorithm>
+#include <map>
+#include <memory>
 #include <string>
+#include <tuple>
 #include <unordered_map>
+#include <vector>
 
 #include <gmock/gmock.h>
+#include <gtest/gtest.h>
 
+#include "gromacs/ewald/pme.h"
+#include "gromacs/ewald/pme_gpu_internal.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdtypes/inputrec.h"
+#include "gromacs/mdtypes/md_enums.h"
+#include "gromacs/mdtypes/state_propagator_data_gpu.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/enumerationhelpers.h"
+#include "gromacs/utility/message_string_collector.h"
+#include "gromacs/utility/range.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/stringutil.h"
 
 #include "testutils/refdata.h"
@@ -256,8 +275,9 @@ public:
         inputRec.coulombtype = CoulombInteractionType::Pme;
         inputRec.epsilon_r   = 1.0;
 
-        const PmeTestHardwareContext& pmeTestHardwareContext = getPmeTestHardwareContexts()[contextIndex];
-        CodePath                      codePath               = pmeTestHardwareContext.codePath();
+        const auto                    pmeTestHardwareContextsAll = getPmeTestHardwareContexts();
+        const PmeTestHardwareContext& pmeTestHardwareContext = pmeTestHardwareContextsAll[contextIndex];
+        const CodePath                codePath               = pmeTestHardwareContext.codePath();
         MessageStringCollector        messages = getSkipMessagesIfNecessary(inputRec, codePath);
         if (!messages.isEmpty())
         {
@@ -376,8 +396,9 @@ public:
         {
             /* The wrapped grid */
             SparseRealGridValuesOutput nonZeroGridValues = pmeGetRealGrid(pmeSafe.get(), codePath);
-            const auto                 ulpToleranceGrid  = 2 * ulpToleranceSplineValues
-                                          * static_cast<int>(ceil(sqrt(static_cast<real>(atomCount))));
+            const auto                 ulpToleranceGrid =
+                    2 * ulpToleranceSplineValues
+                    * static_cast<int>(std::ceil(std::sqrt(static_cast<real>(atomCount))));
             /* 2 is empiric; sqrt(atomCount) assumes all the input charges may spread onto the same cell */
             SCOPED_TRACE(formatString("Testing grid values with tolerance of %d", ulpToleranceGrid));
 

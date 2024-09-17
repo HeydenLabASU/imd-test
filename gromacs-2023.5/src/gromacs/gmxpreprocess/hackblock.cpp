@@ -38,12 +38,15 @@
 
 #include <cstring>
 
+#include <iterator>
+
 #include "gromacs/gmxpreprocess/notset.h"
 #include "gromacs/math/vec.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/topology/atoms.h"
 #include "gromacs/topology/symtab.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/exceptions.h"
@@ -224,6 +227,11 @@ bool mergeBondedInteractionList(gmx::ArrayRef<const BondedInteractionList> s,
         }
     }
     return bBondsRemoved;
+}
+
+int PreprocessResidue::natom() const
+{
+    return atom.size();
 }
 
 void copyPreprocessResidues(const PreprocessResidue& s, PreprocessResidue* d, t_symtab* symtab)

@@ -41,11 +41,14 @@
 #ifndef GMX_APPLIED_FORCES_DENSITYFITTINGPARAMETERS_H
 #define GMX_APPLIED_FORCES_DENSITYFITTINGPARAMETERS_H
 
+#include <cstdint>
+
 #include <string>
 #include <vector>
 
 #include "gromacs/math/densityfit.h"
 #include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/real.h"
 
 #include "densityfittingamplitudelookup.h"
 
@@ -62,7 +65,7 @@ struct DensityFittingParameters
     //! Indicate if density fitting is active
     bool active_ = false;
     //! Indices of the atoms that shall be fit to the density
-    std::vector<index> indices_;
+    std::vector<Index> indices_;
     //! Determines how to measure similarity between simulated and reference density
     DensitySimilarityMeasureMethod similarityMeasureMethod_ = DensitySimilarityMeasureMethod::innerProduct;
     //! Determines with what weight atoms are spread

@@ -42,15 +42,22 @@
 
 #include "gromacs/options/filenameoption.h"
 
+#include <string>
+
 #include <gtest/gtest.h>
 
 #include "gromacs/fileio/filetypes.h"
+#include "gromacs/options/optionfiletype.h"
 #include "gromacs/options/options.h"
 #include "gromacs/options/optionsassigner.h"
 #include "gromacs/utility/exceptions.h"
 
 #include "testutils/testasserts.h"
 
+namespace gmx
+{
+namespace test
+{
 namespace
 {
 
@@ -119,7 +126,7 @@ TEST(FileNameOptionTest, HandlesOptionalDefaultValueWithoutExtension)
     gmx::Options options;
     std::string  value;
     ASSERT_NO_THROW_GMX(options.addOption(
-            FileNameOption("f").store(&value).filetype(gmx::OptionFileType::Index).outputFile().defaultBasename("testfile")));
+            FileNameOption("f").store(&value).filetype(gmx::OptionFileType::AtomIndex).outputFile().defaultBasename("testfile")));
     EXPECT_TRUE(value.empty());
 
     gmx::OptionsAssigner assigner(&options);
@@ -180,7 +187,7 @@ TEST(FileNameOptionTest, GivesErrorOnUnknownFileSuffix)
     gmx::Options options;
     std::string  value;
     ASSERT_NO_THROW_GMX(options.addOption(
-            FileNameOption("f").store(&value).filetype(gmx::OptionFileType::Index).outputFile()));
+            FileNameOption("f").store(&value).filetype(gmx::OptionFileType::AtomIndex).outputFile()));
     EXPECT_TRUE(value.empty());
 
     gmx::OptionsAssigner assigner(&options);
@@ -256,3 +263,5 @@ TEST(FileNameOptionTest, HandlesRequiredCsvOptionWithoutValue)
 }
 
 } // namespace
+} // namespace test
+} // namespace gmx

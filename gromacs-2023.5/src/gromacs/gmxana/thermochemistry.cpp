@@ -38,8 +38,12 @@
 #include <cmath>
 #include <cstdio>
 
+#include <algorithm>
+
+#include "gromacs/math/functions.h"
 #include "gromacs/math/units.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
 
@@ -67,7 +71,7 @@ double calcVibrationalInternalEnergy(gmx::ArrayRef<const real> eigval, real temp
     size_t nskip = linear ? 5 : 6;
     double Evib  = 0;
     double hbar  = gmx::c_planck1 / (2 * M_PI);
-    for (gmx::index i = nskip; i < eigval.ssize(); i++)
+    for (gmx::Index i = nskip; i < eigval.ssize(); i++)
     {
         if (eigval[i] > 0)
         {
@@ -99,7 +103,7 @@ double calcVibrationalHeatCapacity(gmx::ArrayRef<const real> eigval, real temper
     size_t nskip = linear ? 5 : 6;
     double cv    = 0;
     double hbar  = gmx::c_planck1 / (2 * M_PI);
-    for (gmx::index i = nskip; i < eigval.ssize(); i++)
+    for (gmx::Index i = nskip; i < eigval.ssize(); i++)
     {
         if (eigval[i] > 0)
         {
@@ -170,7 +174,7 @@ double calcQuasiHarmonicEntropy(gmx::ArrayRef<const real> eigval, real temperatu
     size_t nskip = bLinear ? 5 : 6;
     double S     = 0;
     double hbar  = gmx::c_planck1 / (2 * M_PI);
-    for (gmx::index i = nskip; (i < eigval.ssize()); i++)
+    for (gmx::Index i = nskip; (i < eigval.ssize()); i++)
     {
         if (eigval[i] > 0)
         {
@@ -209,7 +213,7 @@ double calcSchlitterEntropy(gmx::ArrayRef<const real> eigval, real temperature, 
         fprintf(debug, "n = %td, kteh = %g evcorr = %g\n", ssize(eigval), kteh, evcorr);
     }
     double deter = 0;
-    for (gmx::index i = nskip; i < eigval.ssize(); i++)
+    for (gmx::Index i = nskip; i < eigval.ssize(); i++)
     {
         double dd = 1 + kteh * eigval[i] * evcorr;
         deter += std::log(dd);

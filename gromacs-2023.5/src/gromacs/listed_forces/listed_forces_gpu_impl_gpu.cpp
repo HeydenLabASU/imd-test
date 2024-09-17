@@ -49,6 +49,7 @@
 #include "gromacs/gpu_utils/device_stream.h"
 #include "gromacs/gpu_utils/devicebuffer.h"
 #include "gromacs/hardware/device_information.h"
+#include "gromacs/mdlib/gmx_omp_nthreads.h"
 #include "gromacs/mdtypes/enerdata.h"
 #include "gromacs/nbnxm/gpu_types_common.h"
 #include "gromacs/timing/wallcycle.h"
@@ -65,11 +66,11 @@ namespace gmx
 
 static int chooseSubGroupSizeForDevice(const DeviceInformation& deviceInfo)
 {
-    if (deviceInfo.supportedSubGroupSizesSize == 1)
+    if (deviceInfo.supportedSubGroupSizes.size() == 1)
     {
-        return deviceInfo.supportedSubGroupSizesData[0];
+        return deviceInfo.supportedSubGroupSizes[0];
     }
-    else if (deviceInfo.supportedSubGroupSizesSize > 1)
+    else if (deviceInfo.supportedSubGroupSizes.size() > 1)
     {
         switch (deviceInfo.deviceVendor)
         {
@@ -86,14 +87,17 @@ static int chooseSubGroupSizeForDevice(const DeviceInformation& deviceInfo)
     }
 }
 
-ListedForcesGpu::Impl::Impl(const gmx_ffparams_t&    ffparams,
-                            const float              electrostaticsScaleFactor,
-                            const DeviceInformation& deviceInfo,
-                            const DeviceContext&     deviceContext,
-                            const DeviceStream&      deviceStream,
-                            gmx_wallcycle*           wcycle) :
+ListedForcesGpu::Impl::Impl(const gmx_ffparams_t& ffparams,
+                            const float           electrostaticsScaleFactor,
+                            const int             numEnergyGroupsForListedForces,
+                            const DeviceContext&  deviceContext,
+                            const DeviceStream&   deviceStream,
+                            gmx_wallcycle*        wcycle) :
     deviceContext_(deviceContext), deviceStream_(deviceStream)
 {
+    GMX_RELEASE_ASSERT(numEnergyGroupsForListedForces == 1,
+                       "Only a single energy group is supported with listed forces on GPU");
+
     GMX_RELEASE_ASSERT(deviceStream.isValid(),
                        "Can't run GPU version of bonded forces in stream that is not valid.");
 
@@ -129,11 +133,12 @@ ListedForcesGpu::Impl::Impl(const gmx_ffparams_t&    ffparams,
         kernelParams_.fTypeRangeEnd[i]   = -1;
     }
 
-    deviceSubGroupSize_ = chooseSubGroupSizeForDevice(deviceInfo);
-    GMX_RELEASE_ASSERT(std::find(deviceInfo.supportedSubGroupSizes().begin(),
-                                 deviceInfo.supportedSubGroupSizes().end(),
+    const DeviceInformation& deviceInfo = deviceContext.deviceInfo();
+    deviceSubGroupSize_                 = chooseSubGroupSizeForDevice(deviceInfo);
+    GMX_RELEASE_ASSERT(std::find(deviceInfo.supportedSubGroupSizes.begin(),
+                                 deviceInfo.supportedSubGroupSizes.end(),
                                  deviceSubGroupSize_)
-                               != deviceInfo.supportedSubGroupSizes().end(),
+                               != deviceInfo.supportedSubGroupSizes.end(),
                        "Device does not support selected sub-group size");
 
     int fTypeRangeEnd = kernelParams_.fTypeRangeEnd[numFTypesOnGpu - 1];
@@ -184,7 +189,7 @@ static void convertIlistToNbnxnOrder(const InteractionList& src,
 
     dest->iatoms.resize(src.size());
 
-    // TODO use OpenMP to parallelise this loop
+#pragma omp parallel for num_threads(gmx_omp_nthreads_get(ModuleMultiThread::Bonded)) schedule(static)
     for (int i = 0; i < src.size(); i += 1 + numAtomsPerInteraction)
     {
         dest->iatoms[i] = src.iatoms[i];
@@ -247,7 +252,7 @@ void ListedForcesGpu::Impl::updateInteractionListsAndDeviceBuffers(ArrayRef<cons
                                                                    DeviceBuffer<RVec>   d_fPtr,
                                                                    DeviceBuffer<RVec>   d_fShiftPtr)
 {
-    // TODO wallcycle sub start
+    wallcycle_sub_start(wcycle_, WallCycleSubCounter::GpuBondedListUpdate);
     bool haveGpuInteractions = false;
     int  fTypesCounter       = 0;
 
@@ -330,7 +335,7 @@ void ListedForcesGpu::Impl::updateInteractionListsAndDeviceBuffers(ArrayRef<cons
     GMX_RELEASE_ASSERT(haveGpuInteractions == haveInteractions_,
                        "inconsistent haveInteractions flags encountered.");
 
-    // TODO wallcycle sub stop
+    wallcycle_sub_stop(wcycle_, WallCycleSubCounter::GpuBondedListUpdate);
 }
 
 void ListedForcesGpu::Impl::setPbc(PbcType pbcType, const matrix box, bool canMoleculeSpanPbc)
@@ -377,7 +382,6 @@ void ListedForcesGpu::Impl::waitAccumulateEnergyTerms(gmx_enerdata_t* enerd)
 
     // Note: We do not support energy groups here
     gmx_grppairener_t* grppener = &enerd->grpp;
-    GMX_RELEASE_ASSERT(grppener->nener == 1, "No energy group support for bondeds on the GPU");
     grppener->energyGroupPairTerms[NonBondedEnergyTerms::LJ14][0] += vTot_[F_LJ14];
     grppener->energyGroupPairTerms[NonBondedEnergyTerms::Coulomb14][0] += vTot_[F_COUL14];
 }
@@ -393,13 +397,13 @@ void ListedForcesGpu::Impl::clearEnergies()
 
 // ---- ListedForcesGpu
 
-ListedForcesGpu::ListedForcesGpu(const gmx_ffparams_t&    ffparams,
-                                 const float              electrostaticsScaleFactor,
-                                 const DeviceInformation& deviceInfo,
-                                 const DeviceContext&     deviceContext,
-                                 const DeviceStream&      deviceStream,
-                                 gmx_wallcycle*           wcycle) :
-    impl_(new Impl(ffparams, electrostaticsScaleFactor, deviceInfo, deviceContext, deviceStream, wcycle))
+ListedForcesGpu::ListedForcesGpu(const gmx_ffparams_t& ffparams,
+                                 const float           electrostaticsScaleFactor,
+                                 const int             numEnergyGroupsForListedForces,
+                                 const DeviceContext&  deviceContext,
+                                 const DeviceStream&   deviceStream,
+                                 gmx_wallcycle*        wcycle) :
+    impl_(new Impl(ffparams, electrostaticsScaleFactor, numEnergyGroupsForListedForces, deviceContext, deviceStream, wcycle))
 {
 }
 

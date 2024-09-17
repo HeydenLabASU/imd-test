@@ -45,6 +45,8 @@
 
 #include <gtest/gtest.h>
 
+#include "gromacs/utility/basedefinitions.h"
+
 #include "leapfrogtestrunners.h"
 
 #if GPU_LEAPFROG_SUPPORTED
@@ -58,14 +60,15 @@ namespace gmx
 {
 namespace test
 {
+class LeapFrogTestData;
 
 #if GPU_LEAPFROG_SUPPORTED
 
 void LeapFrogDeviceTestRunner::integrate(LeapFrogTestData* testData, int numSteps)
 {
-    testDevice_.activate();
     const DeviceContext& deviceContext = testDevice_.deviceContext();
     const DeviceStream&  deviceStream  = testDevice_.deviceStream();
+    deviceContext.activate();
 
     int numAtoms = testData->numAtoms_;
 

@@ -43,9 +43,28 @@
 
 #include "config.h"
 
-#include "gromacs/mdtypes/state_propagator_data_gpu.h"
+#include <memory>
+#include <tuple>
 
-#if !GMX_GPU
+#include "gromacs/gpu_utils/devicebuffer_datatype.h"
+#include "gromacs/math/vectypes.h"
+#include "gromacs/mdtypes/simulation_workload.h"
+#include "gromacs/mdtypes/state_propagator_data_gpu.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/gmxassert.h"
+
+class DeviceContext;
+class DeviceStream;
+class GpuEventSynchronizer;
+enum class GpuApiCallBehavior : int;
+namespace gmx
+{
+class DeviceStreamManager;
+enum class AtomLocality : int;
+} // namespace gmx
+struct gmx_wallcycle;
+
+#if !GMX_GPU || GMX_GPU_HIP
 namespace gmx
 {
 
@@ -317,4 +336,4 @@ void StatePropagatorDataGpu::waitCoordinatesUpdatedOnDevice()
 
 } // namespace gmx
 
-#endif // !GMX_GPU
+#endif // !GMX_GPU || GMX_GPU_HIP

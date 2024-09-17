@@ -42,11 +42,22 @@
 
 #include "gromacs/gmxpreprocess/genconf.h"
 
+#include <filesystem>
+#include <string>
+
+#include <gtest/gtest.h>
+
+#include "gromacs/utility/arrayref.h"
+
 #include "testutils/cmdlinetest.h"
 #include "testutils/refdata.h"
 #include "testutils/testfilemanager.h"
 #include "testutils/textblockmatchers.h"
 
+namespace gmx
+{
+namespace test
+{
 namespace
 {
 
@@ -59,7 +70,7 @@ public:
     GenconfTest()
     {
         std::string confFileName =
-                gmx::test::TestFileManager::getInputFilePath("spc-and-methanol.gro").u8string();
+                gmx::test::TestFileManager::getInputFilePath("spc-and-methanol.gro").string();
         commandLine().addOption("-f", confFileName);
         commandLine().addOption("-seed", "1993"); // make random operations reproducible
         setOutputFile("-o", "out.gro", ExactTextMatch());
@@ -104,3 +115,5 @@ TEST_F(GenconfTest, nbox_rot_Works)
 }
 
 } // namespace
+} // namespace test
+} // namespace gmx

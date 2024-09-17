@@ -46,9 +46,14 @@
 
 #include "legacymdrunoptions.h"
 
+#include <cstdlib>
 #include <cstring>
 
+#include <filesystem>
+
+#include "gromacs/fileio/oenv.h"
 #include "gromacs/math/functions.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
 #include "gromacs/utility/fatalerror.h"
@@ -85,7 +90,7 @@ int LegacyMdrunOptions::updateFromCommandLine(int argc, char** argv, ArrayRef<co
     if (!parse_common_args(&argc,
                            argv,
                            PCA_Flags,
-                           ssize(filenames),
+                           gmx::ssize(filenames),
                            filenames.data(),
                            asize(pa),
                            pa,
@@ -155,7 +160,7 @@ int LegacyMdrunOptions::updateFromCommandLine(int argc, char** argv, ArrayRef<co
         }
     }
 
-    mdrunOptions.rerun            = opt2bSet("-rerun", ssize(filenames), filenames.data());
+    mdrunOptions.rerun            = opt2bSet("-rerun", gmx::ssize(filenames), filenames.data());
     mdrunOptions.ntompOptionIsSet = opt2parg_bSet("-ntomp", asize(pa), pa);
 
     domdecOptions.rankOrder    = static_cast<DdRankOrder>(nenum(ddrank_opt_choices));

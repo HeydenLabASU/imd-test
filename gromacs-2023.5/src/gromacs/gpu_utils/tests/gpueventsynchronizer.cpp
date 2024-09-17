@@ -67,10 +67,10 @@ TEST(GpuEventSynchronizerTest, BasicFunctionality)
     const auto& testDeviceList = getTestHardwareEnvironment()->getTestDeviceList();
     for (const auto& testDevice : testDeviceList)
     {
-        testDevice->activate();
         const DeviceContext& context = testDevice->deviceContext();
-        DeviceStream         streamA(context, DeviceStreamPriority::Normal, false);
-        DeviceStream         streamB(context, DeviceStreamPriority::Normal, false);
+        context.activate();
+        DeviceStream streamA(context, DeviceStreamPriority::Normal, false);
+        DeviceStream streamB(context, DeviceStreamPriority::Normal, false);
 
         {
             SCOPED_TRACE("Constructor");
@@ -98,6 +98,8 @@ TEST(GpuEventSynchronizerTest, BasicFunctionality)
             SCOPED_TRACE("Mark and enqueueWait");
             GpuEventSynchronizer gpuEventSynchronizer;
             gpuEventSynchronizer.markEvent(streamA);
+            // OpenCL standard requires explicit flush in such cases; no-op for CUDA and SYCL
+            issueClFlushInStream(streamA);
             gpuEventSynchronizer.enqueueWaitEvent(streamB);
             streamB.synchronize(); // Should return immediately
         }

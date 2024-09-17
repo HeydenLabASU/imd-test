@@ -35,16 +35,23 @@
 
 #include <cctype>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include <algorithm>
+#include <filesystem>
 #include <limits>
+#include <string>
 #include <vector>
 
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/commandline/viewit.h"
 #include "gromacs/fileio/enxio.h"
+#include "gromacs/fileio/filetypes.h"
+#include "gromacs/fileio/xdr_datatype.h"
 #include "gromacs/fileio/xvgr.h"
 #include "gromacs/gmxana/gmx_ana.h"
 #include "gromacs/math/units.h"
@@ -52,14 +59,18 @@
 #include "gromacs/mdlib/energyoutput.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/trajectory/energyframe.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
 #include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/snprintf.h"
 #include "gromacs/utility/stringutil.h"
+
+struct gmx_output_env_t;
 
 
 /* Structure for the names of lambda vector components */
@@ -88,7 +99,6 @@ typedef struct lambda_vec_t
 typedef struct xvg_t
 {
     const char*   filename;
-    int           ftp;          /* file type */
     int           nset;         /* number of lambdas, including dhdl */
     int*          np;           /* number of data points (du or hists) per lambda */
     double        temp;         /* temperature */
@@ -99,7 +109,6 @@ typedef struct xvg_t
                                    the native lambda and the 'foreign' lambdas. */
     lambda_vec_t native_lambda; /* the native lambda */
 
-    struct xvg_t *next, *prev; /*location in the global linked list of xvg_ts*/
 } xvg_t;
 
 
@@ -238,10 +247,8 @@ static void lambda_components_add(lambda_components_t* lc, const char* name, siz
         srenew(lc->names, lc->Nalloc);
     }
     snew(lc->names[lc->N], name_length + 1);
-    // clang-format off
     // GCC 12.1 has a false positive about the missing \0. But it is already there, nothing to worry about.
-    GCC_DIAGNOSTIC_IGNORE(-Wstringop-truncation)
-    // clang-format on
+    GCC_DIAGNOSTIC_IGNORE("-Wstringop-truncation")
     std::strncpy(lc->names[lc->N], name, name_length);
     GCC_DIAGNOSTIC_RESET
     lc->N++;
@@ -1044,7 +1051,7 @@ static void sim_data_histogram(sim_data_t* sd, const char* filename, int nbin_de
 
             sample_coll_make_hist(sc, &hist, &dx, &minval, nbin_default);
 
-            for (gmx::index i = 0; i < gmx::ssize(hist); i++)
+            for (gmx::Index i = 0; i < gmx::ssize(hist); i++)
             {
                 double xmin = i * dx + minval;
                 double xmax = (i + 1) * dx + minval;
@@ -2865,7 +2872,7 @@ static void read_edr_rawdh_block(samples_t**   smp,
     }
 
     /* make room for the data */
-    if (gmx::index(s->ndu_alloc) < s->ndu + blk->sub[2].nr)
+    if (gmx::Index(s->ndu_alloc) < s->ndu + blk->sub[2].nr)
     {
         s->ndu_alloc += (s->ndu_alloc < static_cast<size_t>(blk->sub[2].nr)) ? blk->sub[2].nr * 2
                                                                              : s->ndu_alloc;

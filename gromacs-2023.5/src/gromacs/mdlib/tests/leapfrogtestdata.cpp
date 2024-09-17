@@ -45,6 +45,7 @@
 #include <cmath>
 
 #include <algorithm>
+#include <array>
 #include <unordered_map>
 #include <vector>
 
@@ -53,7 +54,9 @@
 #include "gromacs/gpu_utils/gpu_utils.h"
 #include "gromacs/math/vec.h"
 #include "gromacs/math/vectypes.h"
+#include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/mdatom.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/stringutil.h"
 
@@ -84,6 +87,7 @@ LeapFrogTestData::LeapFrogTestData(int        numAtoms,
     kineticEnergyData_(std::vector<real>(numTCoupleGroups == 0 ? 1 : numTCoupleGroups, 0),
                        EnsembleTemperatureSetting::NotAvailable,
                        0.0,
+                       false,
                        0.0,
                        1),
     numTCoupleGroups_(numTCoupleGroups)
@@ -153,8 +157,6 @@ LeapFrogTestData::LeapFrogTestData(int        numAtoms,
 
     inputRecord_.eI      = IntegrationAlgorithm::MD;
     inputRecord_.delta_t = timestep_;
-
-    state_.flags = 0;
 
     state_.box[XX][XX] = 10.0;
     state_.box[XX][YY] = 0.0;

@@ -45,15 +45,28 @@
 
 #include "config.h"
 
+#include <cstdio>
+
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "gromacs/domdec/domdec_network.h"
+#include "gromacs/domdec/domdec_struct.h"
 #include "gromacs/math/vec.h"
 #include "gromacs/mdtypes/state.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 
 #include "atomdistribution.h"
 #include "distribute.h"
 #include "domdec_internal.h"
+
+enum class FreeEnergyPerturbationCouplingType : int;
 
 static void dd_collect_cg(gmx_domdec_t*            dd,
                           const int                ddpCount,
@@ -72,7 +85,7 @@ static void dd_collect_cg(gmx_domdec_t*            dd,
     if (ddpCount == dd->ddp_count)
     {
         /* The local state and DD are in sync, use the DD indices */
-        atomGroups = gmx::constArrayRefFromArray(dd->globalAtomGroupIndices.data(), dd->numHomeAtoms);
+        atomGroups = gmx::constArrayRefFromArray(dd->globalAtomIndices.data(), dd->numHomeAtoms);
         nat_home   = dd->comm->atomRanges.numHomeAtoms();
     }
     else if (ddpCountCgGl == ddpCount)
@@ -134,14 +147,13 @@ static void dd_collect_cg(gmx_domdec_t*            dd,
     }
 
     /* Collect the charge group indices on the main */
-    dd_gatherv(dd,
-               atomGroups.size(),
-               atomGroups.data(),
+    dd_gatherv(*dd,
+               atomGroups,
                DDMAIN(dd) ? gmx::makeArrayRef(ma->intBuffer).subArray(0, dd->nnodes)
                           : gmx::ArrayRef<int>(),
                DDMAIN(dd) ? gmx::makeArrayRef(ma->intBuffer).subArray(dd->nnodes, dd->nnodes)
                           : gmx::ArrayRef<int>(),
-               DDMAIN(dd) ? ma->atomGroups.data() : nullptr);
+               DDMAIN(dd) ? ma->atomGroups : gmx::ArrayRef<int>());
 
     dd->comm->main_cg_ddp_count = ddpCount;
 }
@@ -222,8 +234,11 @@ static void dd_collect_vec_gatherv(gmx_domdec_t*                  dd,
     }
 
     const int numHomeAtoms = dd->comm->atomRanges.numHomeAtoms();
-    dd_gatherv(
-            dd, numHomeAtoms, lv.data(), recvCounts, displacements, DDMAIN(dd) ? dd->ma->rvecBuffer.data() : nullptr);
+    dd_gatherv(*dd,
+               lv.subArray(0, numHomeAtoms),
+               recvCounts,
+               displacements,
+               DDMAIN(dd) ? dd->ma->rvecBuffer : gmx::ArrayRef<gmx::RVec>());
 
     if (DDMAIN(dd))
     {
@@ -303,7 +318,7 @@ void dd_collect_state(gmx_domdec_t* dd, const t_state* state_local, t_state* sta
         state->baros_integral     = state_local->baros_integral;
         state->pull_com_prev_step = state_local->pull_com_prev_step;
     }
-    if (state_local->flags & enumValueToBitMask(StateEntry::X))
+    if (state_local->hasEntry(StateEntry::X))
     {
         auto globalXRef = state ? state->x : gmx::ArrayRef<gmx::RVec>();
         dd_collect_vec(dd,
@@ -313,7 +328,7 @@ void dd_collect_state(gmx_domdec_t* dd, const t_state* state_local, t_state* sta
                        state_local->x,
                        globalXRef);
     }
-    if (state_local->flags & enumValueToBitMask(StateEntry::V))
+    if (state_local->hasEntry(StateEntry::V))
     {
         auto globalVRef = state ? state->v : gmx::ArrayRef<gmx::RVec>();
         dd_collect_vec(dd,
@@ -323,7 +338,7 @@ void dd_collect_state(gmx_domdec_t* dd, const t_state* state_local, t_state* sta
                        state_local->v,
                        globalVRef);
     }
-    if (state_local->flags & enumValueToBitMask(StateEntry::Cgp))
+    if (state_local->hasEntry(StateEntry::Cgp))
     {
         auto globalCgpRef = state ? state->cg_p : gmx::ArrayRef<gmx::RVec>();
         dd_collect_vec(dd,

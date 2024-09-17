@@ -205,7 +205,7 @@ private:
      *
      * This is useful for indexing into \c
      * assignmentForAllRanksOnThisNode_. */
-    index indexOfThisRank_ = -1;
+    Index indexOfThisRank_ = -1;
     //! Number of GPU tasks on this node.
     size_t numGpuTasksOnThisNode_ = 0;
     //! Number of ranks on this physical node.
@@ -244,12 +244,10 @@ public:
     void logPerformanceHints(const MDLogger& mdlog, size_t numAvailableDevicesOnThisNode);
     /*! \brief Return handle to the initialized GPU to use in this rank.
      *
-     * \param[out] deviceId Index of the assigned device.
-     *
-     * \returns Device information on the selected devicce. Returns nullptr if no GPU task
+     * \returns Device information on the selected device. Returns nullptr if no GPU task
      *          is assigned to this rank.
      */
-    DeviceInformation* initDevice(int* deviceId) const;
+    DeviceInformation* initDevice() const;
     //! Return whether this rank has a PME task running on a GPU
     bool thisRankHasPmeGpuTask() const;
     //! Return whether this rank has any task running on a GPU

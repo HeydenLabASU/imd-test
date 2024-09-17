@@ -36,30 +36,42 @@
 #include "trjcat.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include <algorithm>
+#include <filesystem>
 #include <string>
+#include <vector>
 
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/fileio/confio.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/gmxfio.h"
+#include "gromacs/fileio/oenv.h"
 #include "gromacs/fileio/pdbio.h"
 #include "gromacs/fileio/tngio.h"
 #include "gromacs/fileio/trxio.h"
 #include "gromacs/fileio/xtcio.h"
 #include "gromacs/fileio/xvgr.h"
+#include "gromacs/math/functions.h"
 #include "gromacs/math/vec.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/topology/index.h"
 #include "gromacs/trajectory/trajectoryframe.h"
 #include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/stringutil.h"
+
+struct gmx_output_env_t;
 
 #define TIME_EXPLICIT 0
 #define TIME_CONTINUE 1
@@ -81,7 +93,7 @@ static void scan_trj_files(gmx::ArrayRef<const std::string> files,
     t_trxframe   fr;
     bool         ok;
 
-    for (gmx::index i = 0; i < files.ssize(); i++)
+    for (gmx::Index i = 0; i < files.ssize(); i++)
     {
         ok = read_first_frame(oenv, &status, files[i].c_str(), &fr, FLAGS);
 
@@ -149,10 +161,10 @@ static void scan_trj_files(gmx::ArrayRef<const std::string> files,
 
 static void sort_files(gmx::ArrayRef<std::string> files, real* settime)
 {
-    for (gmx::index i = 0; i < files.ssize(); i++)
+    for (gmx::Index i = 0; i < files.ssize(); i++)
     {
-        gmx::index minidx = i;
-        for (gmx::index j = i + 1; j < files.ssize(); j++)
+        gmx::Index minidx = i;
+        for (gmx::Index j = i + 1; j < files.ssize(); j++)
         {
             if (settime[j] < settime[minidx])
             {
@@ -202,7 +214,7 @@ static void edit_files(gmx::ArrayRef<std::string> files,
                 timeUnit.c_str(),
                 timeUnit.c_str());
 
-        for (gmx::index i = 0; i < files.ssize(); i++)
+        for (gmx::Index i = 0; i < files.ssize(); i++)
         {
             fprintf(stderr,
                     "%25s   %10.3f %s          ",
@@ -259,7 +271,7 @@ static void edit_files(gmx::ArrayRef<std::string> files,
     }
     else
     {
-        for (gmx::index i = 0; i < files.ssize(); i++)
+        for (gmx::Index i = 0; i < files.ssize(); i++)
         {
             settime[i] = readtime[i];
         }
@@ -277,7 +289,7 @@ static void edit_files(gmx::ArrayRef<std::string> files,
             "\nSummary of files and start times used:\n\n"
             "          File                Start time       Time step\n"
             "---------------------------------------------------------\n");
-    for (gmx::index i = 0; i < files.ssize(); i++)
+    for (gmx::Index i = 0; i < files.ssize(); i++)
     {
         switch (cont_type[i])
         {
@@ -332,7 +344,7 @@ static void do_demux(gmx::ArrayRef<const std::string> inFiles,
     snew(bSet, inFiles.size());
     natoms = -1;
     t      = -1;
-    for (gmx::index i = 0; i < inFiles.ssize(); i++)
+    for (gmx::Index i = 0; i < inFiles.ssize(); i++)
     {
         read_first_frame(oenv, &(fp_in[i]), inFiles[i].c_str(), &(trx[i]), TRX_NEED_X);
         if (natoms == -1)
@@ -363,7 +375,7 @@ static void do_demux(gmx::ArrayRef<const std::string> inFiles,
     }
 
     snew(fp_out, inFiles.size());
-    for (gmx::index i = 0; i < inFiles.ssize(); i++)
+    for (gmx::Index i = 0; i < inFiles.ssize(); i++)
     {
         fp_out[i] = open_trx(outFiles[i].c_str(), "w");
     }
@@ -382,11 +394,11 @@ static void do_demux(gmx::ArrayRef<const std::string> inFiles,
         {
             fprintf(debug, "trx[0].time = %g, time[k] = %g\n", trx[0].time, time[k]);
         }
-        for (gmx::index i = 0; i < inFiles.ssize(); i++)
+        for (gmx::Index i = 0; i < inFiles.ssize(); i++)
         {
             bSet[i] = FALSE;
         }
-        for (gmx::index i = 0; i < inFiles.ssize(); i++)
+        for (gmx::Index i = 0; i < inFiles.ssize(); i++)
         {
             int j = gmx::roundToInt(value[i][k]);
             range_check(j, 0, inFiles.size());
@@ -410,13 +422,13 @@ static void do_demux(gmx::ArrayRef<const std::string> inFiles,
         }
 
         bCont = (k < nval);
-        for (gmx::index i = 0; i < inFiles.ssize(); i++)
+        for (gmx::Index i = 0; i < inFiles.ssize(); i++)
         {
             bCont = bCont && read_next_frame(oenv, fp_in[i], &trx[i]);
         }
     } while (bCont);
 
-    for (gmx::index i = 0; i < inFiles.ssize(); i++)
+    for (gmx::Index i = 0; i < inFiles.ssize(); i++)
     {
         close_trx(fp_in[i]);
         close_trx(fp_out[i]);
@@ -571,7 +583,7 @@ int gmx_trjcat(int argc, char* argv[])
         gmx_fatal(FARGS, "No input files!");
     }
 
-    if (bDeMux && ssize(inFiles) != nset)
+    if (bDeMux && gmx::ssize(inFiles) != nset)
     {
         gmx_fatal(FARGS, "You have specified %td files and %d entries in the demux table", inFiles.ssize(), nset);
     }
@@ -601,7 +613,7 @@ int gmx_trjcat(int argc, char* argv[])
         gmx_fatal(FARGS,
                   "Don't know what to do with more than 1 output file if  not demultiplexing");
     }
-    else if (bDeMux && ssize(outFiles) != nset && outFiles.size() != 1)
+    else if (bDeMux && gmx::ssize(outFiles) != nset && outFiles.size() != 1)
     {
         gmx_fatal(FARGS,
                   "Number of output files should be 1 or %d (#input files), not %td",

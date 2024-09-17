@@ -41,6 +41,10 @@
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <vector>
 
 #include "gromacs/gmxpreprocess/add_par.h"
 #include "gromacs/gmxpreprocess/gpp_atomtype.h"
@@ -52,15 +56,21 @@
 #include "gromacs/math/utilities.h"
 #include "gromacs/math/vec.h"
 #include "gromacs/mdtypes/md_enums.h"
+#include "gromacs/topology/atoms.h"
+#include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/topology/topology_enums.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/logger.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/strconvert.h"
+#include "gromacs/utility/stringutil.h"
 
 #include "hackblock.h"
 #include "resall.h"
@@ -127,8 +137,6 @@ struct VsiteBondParameter
  */
 struct Atom2VsiteBond
 {
-    //! Function type for conversion.
-    int ftype;
     //! The vsite parameters in a list.
     std::vector<VsiteBondParameter> vSiteBondedParameters;
 };
@@ -741,7 +749,7 @@ static bool calc_vsite4fdn_param(InteractionOfType*                          vsi
         /* Calculate component of bond j-m along the direction i-j */
         pm = -bjm * std::cos(aijm);
 
-        if (fabs(pl) < 1000 * GMX_REAL_MIN || fabs(pm) < 1000 * GMX_REAL_MIN)
+        if (std::fabs(pl) < 1000 * GMX_REAL_MIN || std::fabs(pm) < 1000 * GMX_REAL_MIN)
         {
             GMX_LOG(logger.warning)
                     .asParagraph()
@@ -1608,7 +1616,7 @@ void clean_vsite_bondeds(gmx::ArrayRef<InteractionsOfType> plist,
              */
             if ((interaction_function[ftype].flags & IF_VSITE) && ftype != F_VSITEN)
             {
-                for (gmx::index interactionIndex = 0; interactionIndex < gmx::ssize(plist[ftype]);
+                for (gmx::Index interactionIndex = 0; interactionIndex < gmx::ssize(plist[ftype]);
                      interactionIndex++)
                 {
                     int k     = plist[ftype].interactionTypes[interactionIndex].ai();

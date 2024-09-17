@@ -274,14 +274,24 @@
 
 #include <cmath>
 #include <cstdarg>
+#include <cstdio>
 
 #include <algorithm>
+#include <memory>
+#include <string>
 
 #include "gromacs/math/vec.h"
 #include "gromacs/selection/indexutil.h"
+#include "gromacs/selection/position.h"
 #include "gromacs/selection/selection.h"
+#include "gromacs/selection/selectioncollection.h"
+#include "gromacs/selection/selectionenums.h"
+#include "gromacs/selection/selparam.h"
+#include "gromacs/selection/selvalue.h"
+#include "gromacs/topology/block.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/stringutil.h"
 
@@ -292,6 +302,8 @@
 #include "selectioncollection_impl.h"
 #include "selelem.h"
 #include "selmethod.h"
+
+struct gmx_mtop_t;
 
 using gmx::SelectionLocation;
 using gmx::SelectionTreeElement;
@@ -689,7 +701,7 @@ static SelectionTreeElementPointer remove_unused_subexpressions(SelectionTreeEle
         return SelectionTreeElementPointer();
     }
     root = reverse_selelem_chain(root);
-    while (root->child->type == SEL_SUBEXPR && root->child.unique())
+    while (root->child->type == SEL_SUBEXPR && root->child.use_count() == 1)
     {
         // Frees the root element.
         root = root->next;
@@ -699,7 +711,7 @@ static SelectionTreeElementPointer remove_unused_subexpressions(SelectionTreeEle
     while (item)
     {
         SelectionTreeElementPointer next = item->next;
-        if (item->child->type == SEL_SUBEXPR && item->child.unique())
+        if (item->child->type == SEL_SUBEXPR && item->child.use_count() == 1)
         {
             // Frees the current item when it goes out of scope.
             prev->next = next;

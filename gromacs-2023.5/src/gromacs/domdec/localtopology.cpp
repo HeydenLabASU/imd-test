@@ -45,28 +45,40 @@
 
 #include "gromacs/domdec/localtopology.h"
 
+#include <cstdio>
+
 #include <algorithm>
+#include <array>
 #include <iterator>
+#include <memory>
 #include <vector>
 
 #include "gromacs/domdec/domdec_internal.h"
 #include "gromacs/domdec/domdec_struct.h"
+#include "gromacs/domdec/domdec_zones.h"
 #include "gromacs/domdec/ga2la.h"
 #include "gromacs/domdec/options.h"
 #include "gromacs/domdec/reversetopology.h"
+#include "gromacs/math/functions.h"
 #include "gromacs/math/vec.h"
 #include "gromacs/mdtypes/atominfo.h"
 #include "gromacs/mdtypes/forcerec.h"
 #include "gromacs/mdtypes/mdatom.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/topology/idef.h"
+#include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/topology/topsort.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/fixedcapacityvector.h"
 #include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/listoflists.h"
+#include "gromacs/utility/range.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/strconvert.h"
 
 using gmx::ArrayRef;
@@ -193,7 +205,7 @@ static void add_posres(int                     mol,
 
     /* Get the position restraint coordinates from the molblock */
     const int a_molb = mol * numAtomsInMolecule + a_mol;
-    GMX_ASSERT(a_molb < ssize(molb.posres_xA),
+    GMX_ASSERT(a_molb < gmx::ssize(molb.posres_xA),
                "We need a sufficient number of position restraint coordinates");
     /* Copy the force constants */
     t_iparams ip        = ip_in[iatoms[0]];
@@ -236,7 +248,7 @@ static void add_fbposres(int                     mol,
 
     /* Get the position restraint coordinats from the molblock */
     const int a_molb = mol * numAtomsInMolecule + a_mol;
-    GMX_ASSERT(a_molb < ssize(molb.posres_xA),
+    GMX_ASSERT(a_molb < gmx::ssize(molb.posres_xA),
                "We need a sufficient number of position restraint coordinates");
     /* Copy the force constants */
     t_iparams ip = ip_in[iatoms[0]];
@@ -338,13 +350,13 @@ static void combine_idef(InteractionDefinitions* dest, gmx::ArrayRef<const threa
     for (int ftype = 0; ftype < F_NRE; ftype++)
     {
         int n = 0;
-        for (gmx::index s = 1; s < src.ssize(); s++)
+        for (gmx::Index s = 1; s < src.ssize(); s++)
         {
             n += src[s].idef.il[ftype].size();
         }
         if (n > 0)
         {
-            for (gmx::index s = 1; s < src.ssize(); s++)
+            for (gmx::Index s = 1; s < src.ssize(); s++)
             {
                 dest->il[ftype].append(src[s].idef.il[ftype]);
             }
@@ -357,12 +369,12 @@ static void combine_idef(InteractionDefinitions* dest, gmx::ArrayRef<const threa
                         (ftype == F_POSRES ? dest->iparams_posres : dest->iparams_fbposres);
 
                 /* Set nposres to the number of original position restraints in dest */
-                for (gmx::index s = 1; s < src.ssize(); s++)
+                for (gmx::Index s = 1; s < src.ssize(); s++)
                 {
                     nposres -= src[s].idef.il[ftype].size() / 2;
                 }
 
-                for (gmx::index s = 1; s < src.ssize(); s++)
+                for (gmx::Index s = 1; s < src.ssize(); s++)
                 {
                     const std::vector<t_iparams>& iparams_src =
                             (ftype == F_POSRES ? src[s].idef.iparams_posres : src[s].idef.iparams_fbposres);
@@ -392,22 +404,20 @@ static void combine_idef(InteractionDefinitions* dest, gmx::ArrayRef<const threa
  * which this domain is responsible.
  */
 template<bool haveSingleDomain>
-static inline int assignInteractionsForAtom(const AtomIndexSet&       atomIndexSet,
-                                            const reverse_ilist_t&    reverseIlist,
-                                            const gmx_ga2la_t&        ga2la,
-                                            const gmx_domdec_zones_t& zones,
-                                            const bool gmx_unused     checkDistanceMultiBody,
-                                            const ivec gmx_unused     rcheck,
-                                            const bool gmx_unused     checkDistanceTwoBody,
-                                            const real gmx_unused     cutoffSquared,
+static inline int assignInteractionsForAtom(const AtomIndexSet&     atomIndexSet,
+                                            const reverse_ilist_t&  reverseIlist,
+                                            const gmx_ga2la_t&      ga2la,
+                                            const gmx::DomdecZones& zones,
+                                            const bool gmx_unused   checkDistanceMultiBody,
+                                            const ivec gmx_unused   rcheck,
+                                            const bool gmx_unused   checkDistanceTwoBody,
+                                            const real gmx_unused   cutoffSquared,
                                             const t_pbc gmx_unused*         pbc_null,
                                             ArrayRef<const RVec> gmx_unused coordinates,
                                             InteractionDefinitions*         idef,
                                             const int                       iz,
                                             const DDBondedChecking          ddBondedChecking)
 {
-    gmx::ArrayRef<const DDPairInteractionRanges> iZones = zones.iZones;
-
     ArrayRef<const int> rtil = reverseIlist.il;
 
     int numBondedInteractions = 0;
@@ -464,13 +474,13 @@ static inline int assignInteractionsForAtom(const AtomIndexSet&       atomIndexS
                 else if (const auto* entry = ga2la.find(k_gl))
                 {
                     int kz = entry->cell;
-                    if (kz >= zones.n)
+                    if (kz >= zones.numZones())
                     {
-                        kz -= zones.n;
+                        kz -= zones.numZones();
                     }
                     /* Check zone interaction assignments */
-                    bUse = ((iz < iZones.ssize() && iz <= kz && iZones[iz].jZoneRange.isInRange(kz))
-                            || (kz < iZones.ssize() && iz > kz && iZones[kz].jZoneRange.isInRange(iz)));
+                    bUse = ((iz < zones.numIZones() && iz <= kz && zones.jZoneRange(iz).isInRange(kz))
+                            || (kz < zones.numIZones() && iz > kz && zones.jZoneRange(kz).isInRange(iz)));
                     if (bUse)
                     {
                         GMX_ASSERT(ftype != F_CONSTR || (iz == 0 && kz == 0),
@@ -499,10 +509,8 @@ static inline int assignInteractionsForAtom(const AtomIndexSet&       atomIndexS
                  * in each dimension is zero, for dimensions
                  * with 2 DD cells an extra check may be necessary.
                  */
-                ivec k_zero, k_plus;
+                gmx::BasicVector<bool> haveZeroShift({ false, false, false });
                 bUse = true;
-                clear_ivec(k_zero);
-                clear_ivec(k_plus);
                 for (int k = 1; k <= nral && bUse; k++)
                 {
                     /* Get the global index using the offset in the molecule */
@@ -515,49 +523,49 @@ static inline int assignInteractionsForAtom(const AtomIndexSet&       atomIndexS
                         continue;
                     }
                     // NOLINTNEXTLINE(readability-misleading-indentation) remove when clang-tidy-13 is required
-                    if (entry == nullptr || entry->cell >= zones.n)
+                    if (entry == nullptr || entry->cell >= zones.numZones())
                     {
                         /* We do not have this atom of this interaction
                          * locally, or it comes from more than one cell
                          * away.
                          */
-                        bUse = FALSE;
+                        bUse = false;
                     }
                     else
                     {
                         tiatoms[k] = entry->la;
+
+                        GMX_ASSERT(!haveSingleDomain,
+                                   "The single domain case does a continue above");
+
                         for (int d = 0; d < DIM; d++)
                         {
-                            if (zones.shift[entry->cell][d] == 0)
+                            if (zones.shift(entry->cell)[d] == 0)
                             {
-                                k_zero[d] = k;
+                                haveZeroShift[d] = true;
                             }
-                            else
+                        }
+
+                        if (checkDistanceMultiBody && k > 1)
+                        {
+                            /* We check that distances between consecutive atoms in multi-body
+                             * interactions are within the cut-off distance. This guarantees
+                             * that each multi-body interaction is assigned to at most one domain.
+                             * This works because no PBC is applied for distance calculations
+                             * along dimensions with DD and because the atom pairs between which
+                             * the distances are checked are the same on each DD-rank.
+                             */
+                            if (dd_dist2(pbc_null, coordinates, tiatoms[k - 1], entry->la) >= cutoffSquared)
                             {
-                                k_plus[d] = k;
+                                bUse = false;
                             }
                         }
                     }
                 }
+
                 if constexpr (!haveSingleDomain)
                 {
-                    bUse = (bUse && (k_zero[XX] != 0) && (k_zero[YY] != 0) && (k_zero[ZZ] != 0));
-                    if (checkDistanceMultiBody)
-                    {
-                        for (int d = 0; (d < DIM && bUse); d++)
-                        {
-                            /* Check if the distance falls within
-                             * the cut-off to avoid possible multiple
-                             * assignments of bonded interactions.
-                             */
-                            if (rcheck[d] && k_plus[d]
-                                && dd_dist2(pbc_null, coordinates, tiatoms[k_zero[d]], tiatoms[k_plus[d]])
-                                           >= cutoffSquared)
-                            {
-                                bUse = FALSE;
-                            }
-                        }
-                    }
+                    bUse = (bUse && haveZeroShift[XX] && haveZeroShift[YY] && haveZeroShift[ZZ]);
                 }
             }
             if (bUse)
@@ -638,7 +646,7 @@ template<bool haveSingleDomain>
 static int make_bondeds_zone(const gmx_reverse_top_t&           rt,
                              ArrayRef<const int>                globalAtomIndices,
                              const gmx_ga2la_t&                 ga2la,
-                             const gmx_domdec_zones_t&          zones,
+                             const gmx::DomdecZones&            zones,
                              const std::vector<gmx_molblock_t>& molb,
                              const bool                         checkDistanceMultiBody,
                              const ivec                         rcheck,
@@ -651,7 +659,7 @@ static int make_bondeds_zone(const gmx_reverse_top_t&           rt,
                              int                                izone,
                              const gmx::Range<int>&             atomRange)
 {
-    const auto ddBondedChecking = rt.options().ddBondedChecking;
+    const auto ddBondedChecking = rt.options().ddBondedChecking_;
 
     int numBondedInteractions = 0;
 
@@ -720,19 +728,19 @@ static int make_bondeds_zone(const gmx_reverse_top_t&           rt,
 template<bool haveSingleDomain>
 static void make_exclusions_zone(ArrayRef<const int>               globalAtomIndices,
                                  const gmx_ga2la_t&                ga2la,
-                                 const gmx_domdec_zones_t&         zones,
+                                 const gmx::DomdecZones&           zones,
                                  ArrayRef<const MolblockIndices>   molblockIndices,
                                  const std::vector<gmx_moltype_t>& moltype,
-                                 gmx::ArrayRef<const int64_t>      atomInfo,
+                                 gmx::ArrayRef<const int32_t>      atomInfo,
                                  ListOfLists<int>*                 lexcls,
                                  int                               iz,
                                  int                               at_start,
                                  int                               at_end,
                                  const gmx::ArrayRef<const int>    intermolecularExclusionGroup)
 {
-    const auto& jAtomRange = zones.iZones[iz].jAtomRange;
+    const auto& jAtomRange = zones.jAtomRange(iz);
 
-    const gmx::index oldNumLists = lexcls->ssize();
+    const gmx::Index oldNumLists = lexcls->ssize();
 
     std::vector<int> exclusionsForAtom;
     for (int at = at_start; at < at_end; at++)
@@ -796,24 +804,24 @@ static void make_exclusions_zone(ArrayRef<const int>               globalAtomInd
 /*! \brief Generate and store all required local bonded interactions in \p idef and local exclusions in \p lexcls
  *
  * \returns Total count of bonded interactions in the local topology on this domain */
-static int make_local_bondeds_excls(const gmx_domdec_t&       dd,
-                                    const gmx_domdec_zones_t& zones,
-                                    const gmx_mtop_t&         mtop,
-                                    ArrayRef<const int64_t>   atomInfo,
-                                    const bool                checkDistanceMultiBody,
-                                    const ivec                rcheck,
-                                    const gmx_bool            checkDistanceTwoBody,
-                                    const real                cutoff,
-                                    const t_pbc*              pbc_null,
-                                    ArrayRef<const RVec>      coordinates,
-                                    InteractionDefinitions*   idef,
-                                    ListOfLists<int>*         lexcls)
+static int make_local_bondeds_excls(const gmx_domdec_t&     dd,
+                                    const gmx::DomdecZones& zones,
+                                    const gmx_mtop_t&       mtop,
+                                    ArrayRef<const int32_t> atomInfo,
+                                    const bool              checkDistanceMultiBody,
+                                    const ivec              rcheck,
+                                    const gmx_bool          checkDistanceTwoBody,
+                                    const real              cutoff,
+                                    const t_pbc*            pbc_null,
+                                    ArrayRef<const RVec>    coordinates,
+                                    InteractionDefinitions* idef,
+                                    ListOfLists<int>*       lexcls)
 {
     int nzone_bondeds = 0;
 
     if (dd.reverse_top->hasInterAtomicInteractions())
     {
-        nzone_bondeds = zones.n;
+        nzone_bondeds = zones.numZones();
     }
     else
     {
@@ -824,7 +832,7 @@ static int make_local_bondeds_excls(const gmx_domdec_t&       dd,
     }
 
     /* We only use exclusions from i-zones to i- and j-zones */
-    const int numIZonesForExclusions = (dd.haveExclusions ? zones.iZones.size() : 0);
+    const int numIZonesForExclusions = (dd.haveExclusions ? zones.numIZones() : 0);
 
     const gmx_reverse_top_t& rt = *dd.reverse_top;
 
@@ -838,8 +846,8 @@ static int make_local_bondeds_excls(const gmx_domdec_t&       dd,
 
     for (int izone = 0; izone < nzone_bondeds; izone++)
     {
-        const int cg0 = zones.cg_range[izone];
-        const int cg1 = zones.cg_range[izone + 1];
+        const int cg0 = *zones.atomRange(izone).begin();
+        const int cg1 = *zones.atomRange(izone).end();
 
         gmx::ArrayRef<thread_work_t> threadWorkObjects = rt.threadWorkObjects();
         const int                    numThreads        = threadWorkObjects.size();
@@ -864,7 +872,7 @@ static int make_local_bondeds_excls(const gmx_domdec_t&       dd,
                 }
 
                 auto runMakeBondedsZone =
-                        zones.n == 1 ? make_bondeds_zone<true> : make_bondeds_zone<false>;
+                        zones.numZones() == 1 ? make_bondeds_zone<true> : make_bondeds_zone<false>;
                 threadWorkObjects[thread].numBondedInteractions =
                         runMakeBondedsZone(rt,
                                            dd.globalAtomIndices,
@@ -898,8 +906,8 @@ static int make_local_bondeds_excls(const gmx_domdec_t&       dd,
                     }
 
                     /* No charge groups and no distance check required */
-                    auto runMakeExclusionsZone =
-                            zones.n == 1 ? make_exclusions_zone<true> : make_exclusions_zone<false>;
+                    auto runMakeExclusionsZone = zones.numZones() == 1 ? make_exclusions_zone<true>
+                                                                       : make_exclusions_zone<false>;
                     runMakeExclusionsZone(dd.globalAtomIndices,
                                           *dd.ga2la,
                                           zones,
@@ -944,7 +952,7 @@ static int make_local_bondeds_excls(const gmx_domdec_t&       dd,
 }
 
 int dd_make_local_top(const gmx_domdec_t&          dd,
-                      const gmx_domdec_zones_t&    zones,
+                      const gmx::DomdecZones&      zones,
                       int                          npbcdim,
                       matrix                       box,
                       rvec                         cellsize_min,
@@ -952,7 +960,7 @@ int dd_make_local_top(const gmx_domdec_t&          dd,
                       t_forcerec*                  fr,
                       ArrayRef<const RVec>         coordinates,
                       const gmx_mtop_t&            mtop,
-                      gmx::ArrayRef<const int64_t> atomInfo,
+                      gmx::ArrayRef<const int32_t> atomInfo,
                       gmx_localtop_t*              ltop)
 {
     real  rc = -1;
@@ -1011,7 +1019,7 @@ int dd_make_local_top(const gmx_domdec_t&          dd,
         {
             if (fr->bMolPBC)
             {
-                pbc_null = set_pbc_dd(&pbc, fr->pbcType, dd.numCells, TRUE, box);
+                pbc_null = set_pbc_dd(&pbc, fr->pbcType, &dd.numCells, TRUE, box);
             }
             else
             {

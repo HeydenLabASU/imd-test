@@ -48,9 +48,12 @@
 
 #include "gromacs/analysisdata/analysisdata.h"
 
+#include <string>
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "gromacs/analysisdata/datamodule.h"
 #include "gromacs/analysisdata/paralleloptions.h"
 #include "gromacs/analysisdata/tests/datatest.h"
 #include "gromacs/analysisdata/tests/mock_datamodule.h"
@@ -62,6 +65,10 @@ using gmx::test::AnalysisDataTestInput;
 using gmx::test::MockAnalysisDataModule;
 using gmx::test::MockAnalysisDataModulePointer;
 
+namespace gmx
+{
+namespace test
+{
 namespace
 {
 
@@ -153,13 +160,8 @@ class SimpleInputData
 public:
     static const AnalysisDataTestInput& get()
     {
-#    ifndef STATIC_ANON_NAMESPACE_BUG
         static SimpleInputData singleton;
         return singleton.data_;
-#    else
-        static SimpleInputData singleton_analysisdata;
-        return singleton_analysisdata.data_;
-#    endif
     }
 
     SimpleInputData() : data_(1, false)
@@ -180,13 +182,8 @@ class DataSetsInputData
 public:
     static const AnalysisDataTestInput& get()
     {
-#    ifndef STATIC_ANON_NAMESPACE_BUG
         static DataSetsInputData singleton;
         return singleton.data_;
-#    else
-        static DataSetsInputData singleton_analysisdata;
-        return singleton_analysisdata.data_;
-#    endif
     }
 
     DataSetsInputData() : data_(2, false)
@@ -215,13 +212,8 @@ class MultipointInputData
 public:
     static const AnalysisDataTestInput& get()
     {
-#    ifndef STATIC_ANON_NAMESPACE_BUG
         static MultipointInputData singleton;
         return singleton.data_;
-#    else
-        static MultipointInputData singleton_analysisdata;
-        return singleton_analysisdata.data_;
-#    endif
     }
 
     MultipointInputData() : data_(1, true)
@@ -252,13 +244,8 @@ class MultipointDataSetsInputData
 public:
     static const AnalysisDataTestInput& get()
     {
-#    ifndef STATIC_ANON_NAMESPACE_BUG
         static MultipointDataSetsInputData singleton;
         return singleton.data_;
-#    else
-        static MultipointDataSetsInputData singleton_analysisdata;
-        return singleton_analysisdata.data_;
-#    endif
     }
 
     MultipointDataSetsInputData() : data_(2, true)
@@ -450,3 +437,5 @@ TEST(DISABLED_AnalysisDataCommonTest, GenericTests)
 #endif
 
 } // namespace
+} // namespace test
+} // namespace gmx

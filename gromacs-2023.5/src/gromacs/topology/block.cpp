@@ -38,8 +38,11 @@
 #include <cstdio>
 
 #include <algorithm>
+#include <vector>
 
 #include "gromacs/topology/index.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/listoflists.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/txtdump.h"
@@ -214,7 +217,7 @@ void pr_listoflists(FILE* fp, int indent, const char* title, const gmx::ListOfLi
     if (available(fp, lists, indent, title))
     {
         indent = pr_listoflists_title(fp, indent, title, lists);
-        for (gmx::index i = 0; i < lists->ssize(); i++)
+        for (gmx::Index i = 0; i < lists->ssize(); i++)
         {
             int                      size = pr_indent(fp, indent);
             gmx::ArrayRef<const int> list = (*lists)[i];

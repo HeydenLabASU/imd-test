@@ -42,13 +42,21 @@
 
 #include "gromacs/math/matrix.h"
 
+#include <algorithm>
+#include <array>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "gromacs/math/multidimarray.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
+#include "gromacs/mdspan/extents.h"
+#include "gromacs/mdspan/layouts.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/real.h"
 
 #include "testutils/testasserts.h"
@@ -142,6 +150,56 @@ TEST_F(MatrixTest, staticMultiDimArrayExtent)
     EXPECT_EQ(matrix_.extent(1), 3);
 }
 
+TEST_F(MatrixTest, canAddMatrix)
+{
+    Matrix3x3 a = { { 1, 2, 3, 4, 5, 6, 7, 8, 9 } };
+    Matrix3x3 b = { { 9, 8, 7, 6, 5, 4, 3, 2, 1 } };
+    Matrix3x3 c;
+    c = a + b;
+    EXPECT_EQ(c(0, 0), 10);
+    EXPECT_EQ(c(0, 1), 10);
+    EXPECT_EQ(c(0, 2), 10);
+    EXPECT_EQ(c(1, 0), 10);
+    EXPECT_EQ(c(1, 1), 10);
+    EXPECT_EQ(c(1, 2), 10);
+    EXPECT_EQ(c(2, 0), 10);
+    EXPECT_EQ(c(2, 1), 10);
+    EXPECT_EQ(c(2, 2), 10);
+}
+
+TEST_F(MatrixTest, canSubstractMatrix)
+{
+    Matrix3x3 a = { { 1, 2, 3, 4, 5, 6, 7, 8, 9 } };
+    Matrix3x3 b = { { 9, 8, 7, 6, 5, 4, 3, 2, 1 } };
+    Matrix3x3 c;
+    c = a - b;
+    EXPECT_EQ(c(0, 0), -8);
+    EXPECT_EQ(c(0, 1), -6);
+    EXPECT_EQ(c(0, 2), -4);
+    EXPECT_EQ(c(1, 0), -2);
+    EXPECT_EQ(c(1, 1), 0);
+    EXPECT_EQ(c(1, 2), 2);
+    EXPECT_EQ(c(2, 0), 4);
+    EXPECT_EQ(c(2, 1), 6);
+    EXPECT_EQ(c(2, 2), 8);
+}
+
+TEST_F(MatrixTest, canNegateMatrix)
+{
+    Matrix3x3 a = { { 1, 2, 3, 4, 5, 6, 7, 8, 9 } };
+    Matrix3x3 b;
+    b = -a;
+    EXPECT_EQ(b(0, 0), -1);
+    EXPECT_EQ(b(0, 1), -2);
+    EXPECT_EQ(b(0, 2), -3);
+    EXPECT_EQ(b(1, 0), -4);
+    EXPECT_EQ(b(1, 1), -5);
+    EXPECT_EQ(b(1, 2), -6);
+    EXPECT_EQ(b(2, 0), -7);
+    EXPECT_EQ(b(2, 1), -8);
+    EXPECT_EQ(b(2, 2), -9);
+}
+
 TEST_F(MatrixTest, determinantWorks)
 {
     const Matrix3x3 mat = { { 1.0, 2.0, 3.0, 0.0, 1.0, 4.0, 5.0, 6.0, 0.0 } };
@@ -229,6 +287,40 @@ TEST_F(MatrixTest, IdentityMatrix)
     EXPECT_REAL_EQ(realIdMatrix(0, 1), 0);
     EXPECT_REAL_EQ(realIdMatrix(1, 0), 0);
 }
+
+TEST_F(MatrixTest, MatrixMatrixInnerProduct)
+{
+    const Matrix3x3 matrixA({ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
+    const Matrix3x3 matrixB({ 9, 8, 7, 6, 5, 4, 3, 2, 1 });
+    Matrix3x3       matrixC = inner(matrixA, matrixB);
+    EXPECT_REAL_EQ(matrixC(0, 0), 30);
+    EXPECT_REAL_EQ(matrixC(0, 1), 24);
+    EXPECT_REAL_EQ(matrixC(0, 2), 18);
+    EXPECT_REAL_EQ(matrixC(1, 0), 84);
+    EXPECT_REAL_EQ(matrixC(1, 1), 69);
+    EXPECT_REAL_EQ(matrixC(1, 2), 54);
+    EXPECT_REAL_EQ(matrixC(2, 0), 138);
+    EXPECT_REAL_EQ(matrixC(2, 1), 114);
+    EXPECT_REAL_EQ(matrixC(2, 2), 90);
+}
+
+
+TEST_F(MatrixTest, MatrixMatrixMultiplication)
+{
+    const Matrix3x3 matrixA({ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
+    const Matrix3x3 matrixB({ 9, 8, 7, 6, 5, 4, 3, 2, 1 });
+    Matrix3x3       matrixC = matrixA * matrixB;
+    EXPECT_REAL_EQ(matrixC(0, 0), 30);
+    EXPECT_REAL_EQ(matrixC(0, 1), 24);
+    EXPECT_REAL_EQ(matrixC(0, 2), 18);
+    EXPECT_REAL_EQ(matrixC(1, 0), 84);
+    EXPECT_REAL_EQ(matrixC(1, 1), 69);
+    EXPECT_REAL_EQ(matrixC(1, 2), 54);
+    EXPECT_REAL_EQ(matrixC(2, 0), 138);
+    EXPECT_REAL_EQ(matrixC(2, 1), 114);
+    EXPECT_REAL_EQ(matrixC(2, 2), 90);
+}
+
 
 TEST_F(MatrixTest, MatrixVectorMultiplication)
 {

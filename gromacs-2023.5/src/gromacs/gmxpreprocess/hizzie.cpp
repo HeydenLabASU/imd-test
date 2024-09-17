@@ -40,6 +40,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include <filesystem>
+
 #include "gromacs/fileio/pdbio.h"
 #include "gromacs/gmxpreprocess/pdb2top.h"
 #include "gromacs/gmxpreprocess/toputil.h"
@@ -47,9 +49,11 @@
 #include "gromacs/math/units.h"
 #include "gromacs/math/utilities.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/block.h"
 #include "gromacs/topology/symtab.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/smalloc.h"
@@ -142,7 +146,7 @@ static bool chk_hbonds(int i, t_atoms* pdba, rvec x[], const bool ad[], bool hbo
                 d2 = distance2(x[i], x[j]);
                 rvec_sub(x[i], xh, nh);
                 rvec_sub(x[aj], xh, oh);
-                a = gmx::c_rad2Deg * acos(cos_angle(nh, oh));
+                a = gmx::c_rad2Deg * std::acos(cos_angle(nh, oh));
                 if ((d2 < dist2) && (a > angle))
                 {
                     hbond[i] = TRUE;

@@ -34,19 +34,27 @@
 #include "gmxpre.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include <algorithm>
+#include <array>
+#include <filesystem>
+#include <memory>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/commandline/viewit.h"
 #include "gromacs/fileio/confio.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/matio.h"
 #include "gromacs/fileio/pdbio.h"
+#include "gromacs/fileio/rgb.h"
 #include "gromacs/fileio/tpxio.h"
 #include "gromacs/fileio/trxio.h"
 #include "gromacs/fileio/xvgr.h"
@@ -56,6 +64,7 @@
 #include "gromacs/math/do_fit.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdlib/force.h"
 #include "gromacs/mdlib/mdatoms.h"
 #include "gromacs/mdtypes/commrec.h"
@@ -66,15 +75,24 @@
 #include "gromacs/pbcutil/ishift.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/pbcutil/rmpbc.h"
+#include "gromacs/topology/atoms.h"
+#include "gromacs/topology/idef.h"
+#include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/index.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/trajectoryanalysis/topologyinformation.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
+#include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/stringutil.h"
+
+struct gmx_output_env_t;
 
 typedef struct
 {
@@ -555,7 +573,7 @@ static void dump_disre_matrix(const char*                   fn,
     int    n_res, a_offset, mol, a;
     int    i, j, nra, nratoms, tp, ri, rj, index, nlabel, label;
     int    ai, aj, *ptr;
-    real **matrix, *t_res, hi, *w_dr, rav, rviol;
+    real **mat, *t_res, hi, *w_dr, rav, rviol;
     t_rgb  rlo = { 1, 1, 1 };
     t_rgb  rhi = { 0, 0, 0 };
     if (fn == nullptr)
@@ -585,10 +603,10 @@ static void dump_disre_matrix(const char*                   fn,
     {
         t_res[i] = i + 1;
     }
-    snew(matrix, n_res);
+    snew(mat, n_res);
     for (i = 0; (i < n_res); i++)
     {
-        snew(matrix[i], n_res);
+        snew(mat[i], n_res);
     }
     nratoms = interaction_function[F_DISRES].nratoms;
     nra     = (idef.il[F_DISRES].size() / (nratoms + 1));
@@ -649,10 +667,10 @@ static void dump_disre_matrix(const char*                   fn,
                 fprintf(debug, "DR %d, atoms %d, %d, distance %g\n", i, ai, aj, rav);
             }
             rviol = std::max(0.0_real, rav - idef.iparams[tp].disres.up1);
-            matrix[ri][rj] += w_dr[i] * rviol;
-            matrix[rj][ri] += w_dr[i] * rviol;
-            hi = std::max(hi, matrix[ri][rj]);
-            hi = std::max(hi, matrix[rj][ri]);
+            mat[ri][rj] += w_dr[i] * rviol;
+            mat[rj][ri] += w_dr[i] * rviol;
+            hi = std::max(hi, mat[ri][rj]);
+            hi = std::max(hi, mat[rj][ri]);
         }
     }
 
@@ -681,7 +699,7 @@ static void dump_disre_matrix(const char*                   fn,
               n_res,
               t_res,
               t_res,
-              matrix,
+              mat,
               0,
               hi,
               rlo,
@@ -869,7 +887,7 @@ int gmx_disre(int argc, char* argv[])
 
     auto mdAtoms = gmx::makeMDAtoms(fplog, *topInfo.mtop(), *ir, false);
     atoms2md(*topInfo.mtop(), *ir, -1, {}, ntopatoms, mdAtoms.get());
-    update_mdatoms(mdAtoms->mdatoms(), ir->fepvals->init_lambda);
+    update_mdatoms(mdAtoms->mdatoms(), ir->fepvals->initialLambda(FreeEnergyPerturbationCouplingType::Fep));
     if (ir->pbcType != PbcType::No)
     {
         gpbc = gmx_rmpbc_init(idef, ir->pbcType, natoms);
@@ -886,7 +904,7 @@ int gmx_disre(int argc, char* argv[])
             }
             else
             {
-                gmx_rmpbc(gpbc, natoms, box, x);
+                gmx_rmpbc_apply(gpbc, natoms, box, x);
             }
         }
 

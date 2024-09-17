@@ -46,6 +46,7 @@
 #define GMX_AWH_BIASWRITER_H
 
 #include <map>
+#include <utility>
 #include <vector>
 
 #include "gromacs/fileio/enxio.h"
@@ -114,8 +115,8 @@ public:
      */
     gmx::ArrayRef<float> data() { return data_; }
 
-    const Normalization normalizationType;  /**< How to normalize the output data */
-    const float         normalizationValue; /**< The normalization value */
+    const Normalization normalizationType_;  /**< How to normalize the output data */
+    const float         normalizationValue_; /**< The normalization value */
 private:
     std::vector<float> data_; /**< The data, always float which is enough since this is statistical data */
 };
@@ -171,7 +172,7 @@ private:
      * \param[in] metaDataType   The type of meta data to write.
      * \param[in] bias           The AWH Bias.
      */
-    void transferMetaDataToWriter(gmx::index metaDataIndex, AwhOutputMetaData metaDataType, const Bias& bias);
+    void transferMetaDataToWriter(gmx::Index metaDataIndex, AwhOutputMetaData metaDataType, const Bias& bias);
 
     /*! \brief Transfer AWH point data to writer data blocks.
      *

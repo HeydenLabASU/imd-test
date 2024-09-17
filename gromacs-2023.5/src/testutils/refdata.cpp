@@ -44,13 +44,19 @@
 #include "testutils/refdata.h"
 
 #include <cctype>
+#include <cinttypes>
 #include <cstdlib>
 
 #include <algorithm>
 #include <filesystem>
 #include <limits>
+#include <list>
+#include <memory>
 #include <optional>
+#include <ostream>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -58,6 +64,7 @@
 #include "gromacs/options/basicoptions.h"
 #include "gromacs/options/ioptionscontainer.h"
 #include "gromacs/utility/any.h"
+#include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/keyvaluetree.h"
@@ -158,21 +165,25 @@ typedef std::shared_ptr<internal::TestReferenceDataImpl> TestReferenceDataImplPo
  * test listener).
  */
 TestReferenceDataImplPointer g_referenceData;
-//! Global reference data mode set with setReferenceDataMode().
+//! Global reference data mode set by the `-ref-data` command-line option
 ReferenceDataMode g_referenceDataMode = ReferenceDataMode::Compare;
 
-//! Returns the global reference data mode.
-ReferenceDataMode getReferenceDataMode()
+} // namespace
+
+ReferenceDataMode referenceDataMode()
 {
     return g_referenceDataMode;
 }
+
+namespace
+{
 
 //! Returns a reference to the global reference data object.
 TestReferenceDataImplPointer initReferenceDataInstance(std::optional<std::filesystem::path> testNameOverride)
 {
     GMX_RELEASE_ASSERT(!g_referenceData, "Test cannot create multiple TestReferenceData instances");
     g_referenceData.reset(new internal::TestReferenceDataImpl(
-            getReferenceDataMode(), false, std::move(testNameOverride)));
+            referenceDataMode(), false, std::move(testNameOverride)));
     return g_referenceData;
 }
 
@@ -181,7 +192,7 @@ TestReferenceDataImplPointer initReferenceDataInstanceForSelfTest(ReferenceDataM
 {
     if (g_referenceData)
     {
-        GMX_RELEASE_ASSERT(g_referenceData.unique(),
+        GMX_RELEASE_ASSERT(g_referenceData.use_count() == 1,
                            "Test cannot create multiple TestReferenceData instances");
         g_referenceData->onTestEnd(true);
         g_referenceData.reset();
@@ -197,7 +208,8 @@ public:
     {
         if (g_referenceData)
         {
-            GMX_RELEASE_ASSERT(g_referenceData.unique(), "Test leaked TestRefeferenceData objects");
+            GMX_RELEASE_ASSERT(g_referenceData.use_count() == 1,
+                               "Test leaked TestRefeferenceData objects");
             g_referenceData->onTestEnd(test_info.result()->Passed());
             g_referenceData.reset();
         }
@@ -296,26 +308,26 @@ TestReferenceDataImpl::TestReferenceDataImpl(ReferenceDataMode                  
                                              std::optional<std::filesystem::path> testNameOverride) :
     updateMismatchingEntries_(false), bSelfTestMode_(bSelfTestMode), bInUse_(false)
 {
-    const std::string dirname  = bSelfTestMode
-                                         ? TestFileManager::getGlobalOutputTempDirectory().u8string()
-                                         : TestFileManager::getInputDataDirectory().u8string();
-    const std::string filename = testNameOverride.has_value()
-                                         ? testNameOverride.value().u8string()
-                                         : TestFileManager::getTestSpecificFileName(".xml").u8string();
-    fullFilename_              = std::filesystem::path(dirname).append("refdata").append(filename);
+    const std::filesystem::path dirname = bSelfTestMode
+                                                  ? TestFileManager::getGlobalOutputTempDirectory()
+                                                  : TestFileManager::getInputDataDirectory();
+    const std::filesystem::path filename =
+            testNameOverride.has_value() ? testNameOverride.value()
+                                         : TestFileManager::getTestSpecificFileName(".xml");
+    fullFilename_ = dirname / "refdata" / filename;
 
     switch (mode)
     {
         case ReferenceDataMode::Compare:
             if (File::exists(fullFilename_, File::throwOnError))
             {
-                compareRootEntry_ = readReferenceDataFile(fullFilename_.u8string());
+                compareRootEntry_ = readReferenceDataFile(fullFilename_.string());
             }
             break;
         case ReferenceDataMode::CreateMissing:
             if (File::exists(fullFilename_, File::throwOnError))
             {
-                compareRootEntry_ = readReferenceDataFile(fullFilename_.u8string());
+                compareRootEntry_ = readReferenceDataFile(fullFilename_.string());
             }
             else
             {
@@ -326,7 +338,7 @@ TestReferenceDataImpl::TestReferenceDataImpl(ReferenceDataMode                  
         case ReferenceDataMode::UpdateChanged:
             if (File::exists(fullFilename_, File::throwOnError))
             {
-                compareRootEntry_ = readReferenceDataFile(fullFilename_.u8string());
+                compareRootEntry_ = readReferenceDataFile(fullFilename_.string());
             }
             else
             {
@@ -360,10 +372,10 @@ void TestReferenceDataImpl::onTestEnd(bool testPassed) const
                 if (!std::filesystem::create_directory(dirname))
                 {
                     GMX_THROW(TestException(gmx::formatString(
-                            "Creation of reference data directory failed: %s", dirname.u8string().c_str())));
+                            "Creation of reference data directory failed: %s", dirname.string().c_str())));
                 }
             }
-            writeReferenceDataFile(fullFilename_.u8string(), *outputRootEntry_);
+            writeReferenceDataFile(fullFilename_.string(), *outputRootEntry_);
         }
     }
     else if (compareRootEntry_)
@@ -391,6 +403,8 @@ public:
     static const char* const cBooleanNodeName;
     //! String constant for naming XML elements for string values.
     static const char* const cStringNodeName;
+    //! String constant for naming XML elements for single char values.
+    static const char* const cCharNodeName;
     //! String constant for naming XML elements for unsigned char values.
     static const char* const cUCharNodeName;
     //! String constant for naming XML elements for integer values.
@@ -566,6 +580,7 @@ public:
 
 const char* const TestReferenceChecker::Impl::cBooleanNodeName    = "Bool";
 const char* const TestReferenceChecker::Impl::cStringNodeName     = "String";
+const char* const TestReferenceChecker::Impl::cCharNodeName       = "Char";
 const char* const TestReferenceChecker::Impl::cUCharNodeName      = "UChar";
 const char* const TestReferenceChecker::Impl::cIntegerNodeName    = "Int";
 const char* const TestReferenceChecker::Impl::cInt32NodeName      = "Int32";
@@ -692,6 +707,11 @@ TestReferenceData::TestReferenceData() : impl_(initReferenceDataInstance(std::nu
 
 
 TestReferenceData::TestReferenceData(std::string testNameOverride) :
+    impl_(initReferenceDataInstance(std::move(testNameOverride)))
+{
+}
+
+TestReferenceData::TestReferenceData(std::filesystem::path testNameOverride) :
     impl_(initReferenceDataInstance(std::move(testNameOverride)))
 {
 }
@@ -905,6 +925,13 @@ void TestReferenceChecker::checkTextBlock(const std::string& value, const char* 
 }
 
 
+void TestReferenceChecker::checkChar(char value, const char* id)
+{
+    EXPECT_PLAIN(impl_->processItem(
+            Impl::cCharNodeName, id, ExactStringChecker(formatString("%c", value))));
+}
+
+
 void TestReferenceChecker::checkUChar(unsigned char value, const char* id)
 {
     EXPECT_PLAIN(impl_->processItem(
@@ -1024,6 +1051,14 @@ void TestReferenceChecker::checkAny(const Any& any, const char* id)
     if (any.isType<bool>())
     {
         checkBoolean(any.cast<bool>(), id);
+    }
+    else if (any.isType<char>())
+    {
+        checkChar(any.cast<char>(), id);
+    }
+    else if (any.isType<unsigned char>())
+    {
+        checkUChar(any.cast<unsigned char>(), id);
     }
     else if (any.isType<int>())
     {

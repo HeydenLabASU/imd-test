@@ -42,13 +42,26 @@
 
 #include "gromacs/math/densityfit.h"
 
-#include <algorithm>
-#include <numeric>
+#include <cmath>
 
+#include <algorithm>
+#include <functional>
+#include <iterator>
+#include <memory>
+#include <numeric>
+#include <vector>
+
+#include "gromacs/math/functions.h"
 #include "gromacs/math/multidimarray.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/mdspan/extensions.h"
+#include "gromacs/mdspan/extents.h"
+#include "gromacs/mdspan/layouts.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/exceptions.h"
+#include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 
 namespace gmx
 {
@@ -249,7 +262,7 @@ CrossCorrelationEvaluationHelperValues evaluateHelperValues(DensitySimilarityMea
 {
     CrossCorrelationEvaluationHelperValues helperValues;
 
-    index i = 0;
+    Index i = 0;
 
     const auto* referenceIterator = begin(reference);
     for (const real comp : compared)
@@ -295,7 +308,7 @@ private:
                    "Squared sum of comparison values needs to be larger than zero.");
         GMX_ASSERT(referenceSquaredSum > 0,
                    "Squared sum of reference values needs to be larger than zero.");
-        return 1.0 / (sqrt(comparisonSquaredSum) * sqrt(referenceSquaredSum));
+        return 1.0 / (std::sqrt(comparisonSquaredSum) * std::sqrt(referenceSquaredSum));
     }
     const real prefactor_;
     const real comparisonPrefactor_;
@@ -350,10 +363,10 @@ real DensitySimilarityCrossCorrelation::similarity(density comparedDensity)
     // To avoid numerical instability due to large squared density value sums
     // division is re-written to avoid multiplying two large numbers
     // as product of two separate divisions of smaller numbers
-    const real covarianceSqrt = sqrt(fabs(helperValues.covariance));
+    const real covarianceSqrt = std::sqrt(std::fabs(helperValues.covariance));
     const int  sign           = helperValues.covariance > 0 ? 1 : -1;
-    return sign * (covarianceSqrt / sqrt(helperValues.referenceSquaredSum))
-           * (covarianceSqrt / sqrt(helperValues.comparisonSquaredSum));
+    return sign * (covarianceSqrt / std::sqrt(helperValues.referenceSquaredSum))
+           * (covarianceSqrt / std::sqrt(helperValues.comparisonSquaredSum));
 }
 
 DensitySimilarityMeasure::density DensitySimilarityCrossCorrelation::gradient(density comparedDensity)

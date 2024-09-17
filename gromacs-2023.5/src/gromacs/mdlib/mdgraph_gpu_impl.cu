@@ -49,6 +49,8 @@
 #include "gromacs/gpu_utils/gpueventsynchronizer.h"
 #include "gromacs/utility/gmxmpi.h"
 
+#if GMX_HAVE_GPU_GRAPH_SUPPORT
+
 namespace gmx
 {
 
@@ -73,27 +75,38 @@ MdGpuGraph::Impl::Impl(const DeviceStreamManager& deviceStreamManager,
 
     if (havePPDomainDecomposition_)
     {
+#    if GMX_MPI
         MPI_Barrier(mpiComm_);
         MPI_Comm_size(mpiComm_, &ppSize_);
         MPI_Comm_rank(mpiComm_, &ppRank_);
+#    endif
     }
+
+    // Avoid update for graphs involving inter-GPU transfers if running on old driver
+    // since, due to a performance bug, the updated graph implements these as GPU-initiated
+    // and they are delayed by the NB kernel
+    int         driverVersion = -1;
+    cudaError_t stat          = cudaDriverGetVersion(&driverVersion);
+    CU_RET_ERR(stat, "cudaDriverGetVersion in MD graph definition finalization failed.");
+    needOldDriverTransferWorkaround_ =
+            (havePPDomainDecomposition_ || haveSeparatePmeRank_) && (driverVersion < 12010);
 }
 
 MdGpuGraph::Impl::~Impl()
 {
-    stat_ = cudaDeviceSynchronize();
-    CU_RET_ERR(stat_, "cudaDeviceSynchronize during MD graph cleanup failed.");
+    cudaError_t stat = cudaDeviceSynchronize();
+    CU_RET_ERR(stat, "cudaDeviceSynchronize during MD graph cleanup failed.");
 
     if (graphAllocated_)
     {
-        stat_ = cudaGraphDestroy(graph_);
-        CU_RET_ERR(stat_, "cudaGraphDestroy during MD graph cleanup failed.");
+        stat = cudaGraphDestroy(graph_);
+        CU_RET_ERR(stat, "cudaGraphDestroy during MD graph cleanup failed.");
     }
 
     if (graphInstanceAllocated_)
     {
-        stat_ = cudaGraphExecDestroy(instance_);
-        CU_RET_ERR(stat_, "cudaGraphExecDestroy diring MD graph cleanup failed.");
+        stat = cudaGraphExecDestroy(instance_);
+        CU_RET_ERR(stat, "cudaGraphExecDestroy during MD graph cleanup failed.");
     }
 }
 
@@ -106,6 +119,7 @@ void MdGpuGraph::Impl::enqueueEventFromAllPpRanksToRank0Stream(GpuEventSynchroni
     {
         if (ppRank_ == remotePpRank)
         {
+#    if GMX_MPI
             // send event to rank 0
             MPI_Send(&event,
                      sizeof(GpuEventSynchronizer*), //NOLINT(bugprone-sizeof-expression)
@@ -113,11 +127,13 @@ void MdGpuGraph::Impl::enqueueEventFromAllPpRanksToRank0Stream(GpuEventSynchroni
                      0,
                      0,
                      mpiComm_);
+#    endif
         }
         else if (ppRank_ == 0)
         {
             // rank 0 enqueues recieved event
             GpuEventSynchronizer* eventToEnqueue;
+#    if GMX_MPI
             MPI_Recv(&eventToEnqueue,
                      sizeof(GpuEventSynchronizer*), //NOLINT(bugprone-sizeof-expression)
                      MPI_BYTE,
@@ -125,6 +141,7 @@ void MdGpuGraph::Impl::enqueueEventFromAllPpRanksToRank0Stream(GpuEventSynchroni
                      0,
                      mpiComm_,
                      MPI_STATUS_IGNORE);
+#    endif
             eventToEnqueue->enqueueWaitEvent(stream);
         }
     }
@@ -140,8 +157,10 @@ void MdGpuGraph::Impl::enqueueRank0EventToAllPpStreams(GpuEventSynchronizer* eve
 {
     if (havePPDomainDecomposition_)
     {
+#    if GMX_MPI
         // NOLINTNEXTLINE(bugprone-sizeof-expression)
         MPI_Bcast(&event, sizeof(GpuEventSynchronizer*), MPI_BYTE, 0, mpiComm_);
+#    endif
     }
     event->enqueueWaitEvent(stream);
 }
@@ -160,12 +179,20 @@ void MdGpuGraph::Impl::disableForDomainIfAnyPpRankHasCpuForces(bool disableGraph
     if (havePPDomainDecomposition_)
     {
         // If disabled on any domain, disable on all domains
-        MPI_Allreduce(&disableGraphAcrossAllPpRanks,
-                      &disableGraphAcrossAllPpRanks_,
-                      sizeof(bool),
-                      MPI_BYTE,
+        int disableGraphAcrossAllPpRanksReductionInput = static_cast<int>(disableGraphAcrossAllPpRanks);
+        int disableGraphAcrossAllPpRanksReductionOutput = 0;
+#    if GMX_MPI
+        MPI_Allreduce(&disableGraphAcrossAllPpRanksReductionInput,
+                      &disableGraphAcrossAllPpRanksReductionOutput,
+                      1,
+                      MPI_INT,
                       MPI_SUM,
                       mpiComm_);
+#    endif
+        if (disableGraphAcrossAllPpRanksReductionOutput > 0)
+        {
+            disableGraphAcrossAllPpRanks_ = true;
+        }
     }
 }
 
@@ -194,7 +221,9 @@ void MdGpuGraph::Impl::startRecord(GpuEventSynchronizer* xReadyOnDeviceEvent)
     wallcycle_sub_start(wcycle_, WallCycleSubCounter::MdGpuGraphWaitBeforeCapture);
     if (havePPDomainDecomposition_)
     {
+#    if GMX_MPI
         MPI_Barrier(mpiComm_);
+#    endif
     }
     wallcycle_sub_stop(wcycle_, WallCycleSubCounter::MdGpuGraphWaitBeforeCapture);
 
@@ -215,10 +244,10 @@ void MdGpuGraph::Impl::startRecord(GpuEventSynchronizer* xReadyOnDeviceEvent)
     // Begin stream capture on PP rank 0 only. We use a single graph across all ranks.
     if (ppRank_ == 0)
     {
-        stat_ = cudaStreamBeginCapture(
+        cudaError_t stat = cudaStreamBeginCapture(
                 deviceStreamManager_.stream(gmx::DeviceStreamType::NonBondedLocal).stream(),
                 cudaStreamCaptureModeGlobal);
-        CU_RET_ERR(stat_, "cudaStreamBeginCapture in MD graph definition initialization failed.");
+        CU_RET_ERR(stat, "cudaStreamBeginCapture in MD graph definition initialization failed.");
     }
 
     // Start artificial fork of rank>0 PP tasks from rank 0 PP
@@ -233,7 +262,9 @@ void MdGpuGraph::Impl::startRecord(GpuEventSynchronizer* xReadyOnDeviceEvent)
         enqueueRank0EventToAllPpStreams(
                 helperEvent_.get(), deviceStreamManager_.stream(gmx::DeviceStreamType::NonBondedLocal));
         // The synchronization below should not be needed, see #4674
+#    if GMX_MPI
         MPI_Barrier(mpiComm_);
+#    endif
 
         // Fork NB non-local stream from NB local stream on each rank
         helperEvent_->markEvent(deviceStreamManager_.stream(gmx::DeviceStreamType::NonBondedLocal));
@@ -252,6 +283,7 @@ void MdGpuGraph::Impl::startRecord(GpuEventSynchronizer* xReadyOnDeviceEvent)
     helperEvent_->enqueueWaitEvent(deviceStreamManager_.stream(gmx::DeviceStreamType::UpdateAndConstraints));
 
     // Re-mark xReadyOnDeviceEvent to allow full isolation within graph capture
+    xReadyOnDeviceEvent->reset();
     xReadyOnDeviceEvent->markEvent(deviceStreamManager_.stream(gmx::DeviceStreamType::UpdateAndConstraints));
     graphState_ = GraphState::Recording;
 };
@@ -306,12 +338,12 @@ void MdGpuGraph::Impl::endRecord()
     {
         if (graphAllocated_)
         {
-            stat_ = cudaGraphDestroy(graph_);
-            CU_RET_ERR(stat_, "cudaGraphDestroy in MD graph definition finalization failed.");
+            cudaError_t stat = cudaGraphDestroy(graph_);
+            CU_RET_ERR(stat, "cudaGraphDestroy in MD graph definition finalization failed.");
         }
-        stat_ = cudaStreamEndCapture(
+        cudaError_t stat = cudaStreamEndCapture(
                 deviceStreamManager_.stream(gmx::DeviceStreamType::NonBondedLocal).stream(), &graph_);
-        CU_RET_ERR(stat_, "cudaStreamEndCapture in MD graph definition finalization failed.");
+        CU_RET_ERR(stat, "cudaStreamEndCapture in MD graph definition finalization failed.");
         graphAllocated_ = true;
     }
 
@@ -320,7 +352,9 @@ void MdGpuGraph::Impl::endRecord()
     // Sync all tasks before closing timing region, since the graph capture should be treated as a collective operation for timing purposes.
     if (havePPDomainDecomposition_)
     {
+#    if GMX_MPI
         MPI_Barrier(mpiComm_);
+#    endif
     }
     wallcycle_sub_stop(wcycle_, WallCycleSubCounter::MdGpuGraphCapture);
     wallcycle_stop(wcycle_, WallCycleCounter::MdGpuGraph);
@@ -345,26 +379,54 @@ void MdGpuGraph::Impl::createExecutableGraph(bool forceGraphReinstantiation)
     if (ppRank_ == 0)
     {
         // Update existing graph (which is cheaper than re-instantiation) if possible.
-        // With current CUDA, only single-threaded update is possible.
-        // Multi-threaded update support will be available in a future CUDA release.
-        if (graphInstanceAllocated_ && !havePPDomainDecomposition_ && !haveSeparatePmeRank_
-            && !forceGraphReinstantiation)
+        bool useGraphUpdate = graphInstanceAllocated_ && !forceGraphReinstantiation
+                              && !needOldDriverTransferWorkaround_;
+        bool updateSuccessful = true;
+        if (useGraphUpdate)
         {
+#    if CUDART_VERSION >= 12000
+            cudaGraphExecUpdateResultInfo updateResultInfo_out;
+            cudaError_t stat = cudaGraphExecUpdate(instance_, graph_, &updateResultInfo_out);
+            bool        additionalCheck =
+                    (updateResultInfo_out.result == cudaGraphExecUpdateErrorTopologyChanged);
+#    else
+            // Use old API, which doesn't provide as detailed error information
             cudaGraphNode_t           hErrorNode_out;
             cudaGraphExecUpdateResult updateResult_out;
-            stat_ = cudaGraphExecUpdate(instance_, graph_, &hErrorNode_out, &updateResult_out);
-            CU_RET_ERR(stat_, "cudaGraphExecUpdate in MD graph definition finalization failed.");
+            cudaError_t stat = cudaGraphExecUpdate(instance_, graph_, &hErrorNode_out, &updateResult_out);
+            bool        additionalCheck = true; // dummy
+#    endif
+            if ((stat == cudaErrorGraphExecUpdateFailure)
+                && (havePPDomainDecomposition_ || haveSeparatePmeRank_) && additionalCheck)
+            {
+                // This unnsuccessful update is due to multithreaded graph capture resulting in a
+                // different ordering, which in a minority of cases CUDA wrongly interprets as being
+                // a different graph topology. Reset the error and re-instantiate in this case.
+                stat = cudaSuccess;
+                cudaGetLastError();
+                updateSuccessful = false;
+            }
+            CU_RET_ERR(stat, "cudaGraphExecUpdate in MD graph definition finalization failed.");
         }
-        else
+        if (!useGraphUpdate || !updateSuccessful)
         {
             if (graphInstanceAllocated_)
             {
-                stat_ = cudaGraphExecDestroy(instance_);
-                CU_RET_ERR(stat_,
-                           "cudaGraphExecDestroy in MD graph definition finalization failed.");
+                cudaError_t stat = cudaGraphExecDestroy(instance_);
+                CU_RET_ERR(stat, "cudaGraphExecDestroy in MD graph definition finalization failed.");
             }
-            stat_ = cudaGraphInstantiate(&instance_, graph_, nullptr, nullptr, 0);
-            CU_RET_ERR(stat_, "cudaGraphInstantiate in MD graph definition finalization failed.");
+            // Instantiate using existing CUDA stream priorities for relative node priorities within graph
+            cudaError_t stat = cudaGraphInstantiate(&instance_,
+                                                    graph_,
+#    if CUDART_VERSION >= 12000
+                                                    cudaGraphInstantiateFlagUseNodePriority
+#    else
+                                                    nullptr,
+                                                    nullptr,
+                                                    0
+#    endif
+            );
+            CU_RET_ERR(stat, "cudaGraphInstantiate in MD graph definition finalization failed.");
             graphInstanceAllocated_ = true;
         }
     }
@@ -374,7 +436,9 @@ void MdGpuGraph::Impl::createExecutableGraph(bool forceGraphReinstantiation)
     // Sync all tasks before closing timing region, since the graph instantiate or update should be treated as a collective operation for timing purposes.
     if (havePPDomainDecomposition_)
     {
+#    if GMX_MPI
         MPI_Barrier(mpiComm_);
+#    endif
     }
     wallcycle_sub_stop(wcycle_, WallCycleSubCounter::MdGpuGraphInstantiateOrUpdate);
     wallcycle_stop(wcycle_, WallCycleCounter::MdGpuGraph);
@@ -391,7 +455,9 @@ void MdGpuGraph::Impl::launchGraphMdStep(GpuEventSynchronizer* xUpdatedOnDeviceE
     wallcycle_sub_start(wcycle_, WallCycleSubCounter::MdGpuGraphWaitBeforeLaunch);
     if (havePPDomainDecomposition_)
     {
+#    if GMX_MPI
         MPI_Barrier(mpiComm_);
+#    endif
     }
     wallcycle_sub_stop(wcycle_, WallCycleSubCounter::MdGpuGraphWaitBeforeLaunch);
 
@@ -443,8 +509,8 @@ void MdGpuGraph::Impl::launchGraphMdStep(GpuEventSynchronizer* xUpdatedOnDeviceE
 
     if (ppRank_ == 0)
     {
-        stat_ = cudaGraphLaunch(instance_, thisLaunchStream->stream());
-        CU_RET_ERR(stat_, "cudaGraphLaunch in MD graph definition finalization failed.");
+        cudaError_t stat = cudaGraphLaunch(instance_, thisLaunchStream->stream());
+        CU_RET_ERR(stat, "cudaGraphLaunch in MD graph definition finalization failed.");
         helperEvent_->markEvent(*thisLaunchStream);
     }
 
@@ -452,6 +518,7 @@ void MdGpuGraph::Impl::launchGraphMdStep(GpuEventSynchronizer* xUpdatedOnDeviceE
     // TODO: This is actually only required on steps that don't have graph usage in
     // their following step, but it is harmless to do it on all steps for the time being.
     enqueueRank0EventToAllPpStreams(helperEvent_.get(), *thisLaunchStream);
+    xUpdatedOnDeviceEvent->reset();
     xUpdatedOnDeviceEvent->markEvent(*thisLaunchStream);
 
     wallcycle_sub_stop(wcycle_, WallCycleSubCounter::MdGpuGraphLaunch);
@@ -540,3 +607,5 @@ GpuEventSynchronizer* MdGpuGraph::getPpTaskCompletionEvent()
 }
 
 } // namespace gmx
+
+#endif // GMX_HAVE_GPU_GRAPH_SUPPORT

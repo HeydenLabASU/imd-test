@@ -98,7 +98,7 @@ void ConstraintsElement<variable>::elementSetup()
         // Constrain the initial coordinates and velocities
         do_constrain_first(fplog_,
                            constr_,
-                           inputrec_,
+                           *inputrec_,
                            statePropagatorData_->totalNumAtoms(),
                            statePropagatorData_->localNumAtoms(),
                            statePropagatorData_->positionsView(),
@@ -165,8 +165,7 @@ void ConstraintsElement<variable>::apply(Step step, bool calculateVirial, bool w
         default: gmx_fatal(FARGS, "Constraint algorithm not implemented for modular simulator.");
     }
 
-    constr_->apply(writeLog,
-                   writeEnergy,
+    constr_->apply(writeLog || writeEnergy,
                    step,
                    1,
                    1.0,
@@ -240,15 +239,15 @@ ISimulatorElement* ConstraintsElement<variable>::getElementPointerImpl(
         GlobalCommunicationHelper gmx_unused* globalCommunicationHelper,
         ObservablesReducer* /*observablesReducer*/)
 {
-    return builderHelper->storeElement(
-            std::make_unique<ConstraintsElement<variable>>(legacySimulatorData->constr,
-                                                           statePropagatorData,
-                                                           energyData,
-                                                           freeEnergyPerturbationData,
-                                                           MAIN(legacySimulatorData->cr),
-                                                           legacySimulatorData->fplog,
-                                                           legacySimulatorData->inputrec,
-                                                           legacySimulatorData->mdAtoms->mdatoms()));
+    return builderHelper->storeElement(std::make_unique<ConstraintsElement<variable>>(
+            legacySimulatorData->constr_,
+            statePropagatorData,
+            energyData,
+            freeEnergyPerturbationData,
+            MAIN(legacySimulatorData->cr_),
+            legacySimulatorData->fpLog_,
+            legacySimulatorData->inputRec_,
+            legacySimulatorData->mdAtoms_->mdatoms()));
 }
 
 // Explicit template initializations

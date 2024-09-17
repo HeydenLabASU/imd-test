@@ -38,12 +38,19 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstddef>
 
 #include "gromacs/applied_forces/awh/awh.h"
+#include "gromacs/applied_forces/awh/biasparams.h"
+#include "gromacs/applied_forces/awh/biasstate.h"
+#include "gromacs/applied_forces/awh/dimparams.h"
+#include "gromacs/applied_forces/awh/histogramsize.h"
+#include "gromacs/fileio/xdr_datatype.h"
 #include "gromacs/mdtypes/awh_params.h"
 #include "gromacs/mdtypes/commrec.h"
 #include "gromacs/trajectory/energyframe.h"
 #include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 
 #include "bias.h"
 #include "biasgrid.h"
@@ -123,7 +130,7 @@ float getNormalizationValue(AwhOutputEntryType outputType, const Bias& bias, int
 } // namespace
 
 AwhEnergyBlock::AwhEnergyBlock(int numPoints, Normalization normalizationType, float normalizationValue) :
-    normalizationType(normalizationType), normalizationValue(normalizationValue), data_(numPoints)
+    normalizationType_(normalizationType), normalizationValue_(normalizationValue), data_(numPoints)
 {
 }
 
@@ -196,26 +203,26 @@ static void normalizeBlock(AwhEnergyBlock* block, const Bias& bias)
     float  minValue  = GMX_FLOAT_MAX;
     float  recipNorm = 0;
 
-    switch (block->normalizationType)
+    switch (block->normalizationType_)
     {
         case Normalization::None: break;
         case Normalization::Coordinate:
             /* Normalize coordinate values by a scale factor */
             for (float& point : data)
             {
-                point *= block->normalizationValue;
+                point *= block->normalizationValue_;
             }
             break;
         case Normalization::FreeEnergy:
             /* Normalize free energy values by subtracting the minimum value */
-            for (gmx::index index = 0; index < data.ssize(); index++)
+            for (gmx::Index index = 0; index < data.ssize(); index++)
             {
                 if (bias.state().points()[index].inTargetRegion() && data[index] < minValue)
                 {
                     minValue = data[index];
                 }
             }
-            for (gmx::index index = 0; index < data.ssize(); index++)
+            for (gmx::Index index = 0; index < data.ssize(); index++)
             {
                 if (bias.state().points()[index].inTargetRegion())
                 {
@@ -232,7 +239,7 @@ static void normalizeBlock(AwhEnergyBlock* block, const Bias& bias)
             }
             if (sum > 0)
             {
-                recipNorm = block->normalizationValue / static_cast<float>(sum);
+                recipNorm = block->normalizationValue_ / static_cast<float>(sum);
             }
             for (float& point : data)
             {
@@ -243,7 +250,7 @@ static void normalizeBlock(AwhEnergyBlock* block, const Bias& bias)
     }
 }
 
-void BiasWriter::transferMetaDataToWriter(gmx::index        metaDataIndex,
+void BiasWriter::transferMetaDataToWriter(gmx::Index        metaDataIndex,
                                           AwhOutputMetaData metaDataType,
                                           const Bias&       bias)
 {

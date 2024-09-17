@@ -50,25 +50,24 @@
 
 #include "nbnxm.h"
 
-struct NbnxmGpu;
-struct NBAtomDataGpu;
 struct gmx_wallclock_gpu_nbnxn_t;
-struct nbnxn_atomdata_t;
-struct NbnxnPairlistGpu;
-struct PairlistParams;
 struct interaction_const_t;
+class DeviceStream;
 
 namespace gmx
 {
+struct NbnxmGpu;
+struct NBAtomDataGpu;
+struct nbnxn_atomdata_t;
+struct NbnxnPairlistGpu;
+struct PairlistParams;
 class DeviceStreamManager;
-}
 
-namespace Nbnxm
-{
+class GpuPairlist;
 
 /** Initializes the data structures related to GPU nonbonded calculations. */
 GPU_FUNC_QUALIFIER
-NbnxmGpu* gpu_init(const gmx::DeviceStreamManager gmx_unused& deviceStreamManager,
+NbnxmGpu* gpu_init(const DeviceStreamManager gmx_unused& deviceStreamManager,
                    const interaction_const_t gmx_unused* ic,
                    const PairlistParams gmx_unused& listParams,
                    const nbnxn_atomdata_t gmx_unused* nbat,
@@ -79,7 +78,7 @@ NbnxmGpu* gpu_init(const gmx::DeviceStreamManager gmx_unused& deviceStreamManage
 GPU_FUNC_QUALIFIER
 void gpu_init_pairlist(NbnxmGpu gmx_unused*          nb,
                        const struct NbnxnPairlistGpu gmx_unused* h_nblist,
-                       gmx::InteractionLocality gmx_unused       iloc) GPU_FUNC_TERM;
+                       InteractionLocality gmx_unused            iloc) GPU_FUNC_TERM;
 
 /** Initializes atom-data on the GPU, called at every pair search step. */
 GPU_FUNC_QUALIFIER
@@ -89,7 +88,7 @@ void gpu_init_atomdata(NbnxmGpu gmx_unused* nb, const nbnxn_atomdata_t gmx_unuse
  *  electrostatic type switching to twin cut-off (or back) if needed.
  */
 GPU_FUNC_QUALIFIER
-void gpu_pme_loadbal_update_param(const struct nonbonded_verlet_t gmx_unused* nbv,
+void gpu_pme_loadbal_update_param(struct nonbonded_verlet_t gmx_unused* nbv,
                                   const interaction_const_t gmx_unused& ic) GPU_FUNC_TERM;
 
 /** Uploads shift vector to the GPU if the box is dynamic (otherwise just returns). */
@@ -130,9 +129,25 @@ NBAtomDataGpu* gpuGetNBAtomData(NbnxmGpu gmx_unused* nb) GPU_FUNC_TERM_WITH_RETU
 /** Returns forces device buffer.
  */
 GPU_FUNC_QUALIFIER
-DeviceBuffer<gmx::RVec> gpu_get_f(NbnxmGpu gmx_unused* nb)
-        GPU_FUNC_TERM_WITH_RETURN(DeviceBuffer<gmx::RVec>{});
+DeviceBuffer<RVec> gpu_get_f(NbnxmGpu gmx_unused* nb) GPU_FUNC_TERM_WITH_RETURN(DeviceBuffer<RVec>{});
 
-} // namespace Nbnxm
+/*! \brief Calculates working memory required for exclusive sum, used in neighbour list sorting on GPU.
+ *
+ * This is only used for CUDA/HIP, where the actual size is calculate based on the list.
+ * For SYCL, the default value of 0 is important for the code to work correctly, this is why we have it set here.
+ * */
+CUDA_FUNC_QUALIFIER
+size_t getExclusiveScanWorkingArraySize(GpuPairlist*        CUDA_FUNC_ARGUMENT(plist),
+                                        const DeviceStream& CUDA_FUNC_ARGUMENT(deviceStream))
+        CUDA_FUNC_TERM_WITH_RETURN(0);
+
+/*! \brief Perform exclusive scan to obtain input for sci sorting. */
+CUDA_FUNC_QUALIFIER
+void performExclusiveScan(size_t              CUDA_FUNC_ARGUMENT(temporaryBufferSize),
+                          char*               CUDA_FUNC_ARGUMENT(temporaryBuffer),
+                          GpuPairlist*        CUDA_FUNC_ARGUMENT(plist),
+                          const DeviceStream& CUDA_FUNC_ARGUMENT(deviceStream)) CUDA_FUNC_TERM;
+
+} // namespace gmx
 
 #endif

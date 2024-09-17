@@ -41,11 +41,17 @@
 
 #include "gromacs/topology/symtab.h"
 
+#include <cstdio>
+
+#include <filesystem>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/inmemoryserializer.h"
 #include "gromacs/utility/strconvert.h"
@@ -95,7 +101,7 @@ private:
 void StringTableTest::checkTable(const StringTable& table)
 {
     TestFileManager files;
-    std::string     filename(files.getTemporaryFilePath("table.txt").u8string());
+    std::string     filename(files.getTemporaryFilePath("table.txt").string());
     FILE*           fp = fopen(filename.c_str(), "w");
     table.printStringTableStorageToFile(fp, 4, "Test title");
     fclose(fp);
@@ -376,7 +382,7 @@ TEST_F(StringTableTest, RoundtripWithCorrectStringIndices)
     InMemoryDeserializer          reader(buffer, false);
     StringTable                   readInTable(&reader);
     std::vector<StringTableEntry> deserializedEntries;
-    for (index gmx_unused i = 0; i < gmx::ssize(testEntries); i++)
+    for (Index gmx_unused i = 0; i < gmx::ssize(testEntries); i++)
     {
         deserializedEntries.emplace_back(readStringTableEntry(&reader, readInTable));
     }

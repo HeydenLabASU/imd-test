@@ -35,12 +35,20 @@
 
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
+#include <filesystem>
+#include <string>
+
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/correlationfunctions/autocorr.h"
 #include "gromacs/correlationfunctions/expfit.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/matio.h"
+#include "gromacs/fileio/oenv.h"
+#include "gromacs/fileio/rgb.h"
 #include "gromacs/fileio/tpxio.h"
 #include "gromacs/fileio/trxio.h"
 #include "gromacs/fileio/xvgr.h"
@@ -48,20 +56,29 @@
 #include "gromacs/gmxana/dens_filter.h"
 #include "gromacs/gmxana/gmx_ana.h"
 #include "gromacs/gmxana/gstat.h"
+#include "gromacs/gmxana/interf.h"
 #include "gromacs/gmxana/powerspect.h"
 #include "gromacs/math/units.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/pbcutil/rmpbc.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/index.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/binaryinformation.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
+
+enum class PbcType : int;
+struct gmx_output_env_t;
 
 
 enum
@@ -203,7 +220,7 @@ static void density_in_time(const char*             fn,
         bbww[XX] = box[ax1][ax1] / *xslices;
         bbww[YY] = box[ax2][ax2] / *yslices;
         bbww[ZZ] = box[axis][axis] / *zslices;
-        gmx_rmpbc(gpbc, top->atoms.nr, box, x0);
+        gmx_rmpbc_apply(gpbc, top->atoms.nr, box, x0);
         /*Reset Densslice every nsttblock steps*/
         /* The first conditional is for clang to understand that this branch is
          * always taken the first time. */
@@ -424,7 +441,7 @@ static void interfaces_txy(real****                Densmap,
                        if(debug){
                        printf("Alpha, Deltandx  %f %i\n", alpha,deltandx);
                        }
-                       if(abs(alpha)>1.0 || abs(deltandx)>3){
+                       if(std::abs(alpha)>1.0 || std::abs(deltandx)>3){
                        pos=zperm[ndx1];
                        spread=-1;
                        }

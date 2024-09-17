@@ -37,11 +37,16 @@
 
 #include <cassert>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include <algorithm>
+#include <filesystem>
 #include <numeric>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "gromacs/topology/atoms.h"
 #include "gromacs/topology/block.h"
@@ -49,9 +54,11 @@
 #include "gromacs/topology/residuetypes.h"
 #include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/listoflists.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/strdb.h"
@@ -141,7 +148,7 @@ static bool grp_cmp(gmx::ArrayRef<const IndexGroup> indexGroups, gmx::ArrayRef<c
     {
         return false;
     }
-    for (gmx::index i = 0; i < a.ssize(); i++)
+    for (gmx::Index i = 0; i < a.ssize(); i++)
     {
         if (a[i] != indexGroup[i])
         {
@@ -438,10 +445,10 @@ static void analyse_prot(gmx::ArrayRef<const std::string> restype,
             if (gmx_ask_yesno(bASK))
             {
                 aid.clear();
-                for (int n = 0; ((atoms->atom[n].resind < npres) && (n < atoms->nr));)
+                for (int n = 0; ((n < atoms->nr) && (atoms->atom[n].resind < npres));)
                 {
                     int resind = atoms->atom[n].resind;
-                    for (; ((atoms->atom[n].resind == resind) && (n < atoms->nr)); n++)
+                    for (; ((n < atoms->nr) && (atoms->atom[n].resind == resind)); n++)
                     {
                         bool match = false;
                         for (int j = 0; (j < constructing_data[i].num_defining_atomnames); j++)
@@ -479,11 +486,11 @@ static void analyse_prot(gmx::ArrayRef<const std::string> restype,
         {
             /* Make swap sidechain C=O index */
             aid.clear();
-            for (int n = 0; ((atoms->atom[n].resind < npres) && (n < atoms->nr));)
+            for (int n = 0; ((n < atoms->nr) && (atoms->atom[n].resind < npres));)
             {
                 int resind = atoms->atom[n].resind;
                 int hold   = -1;
-                for (; ((atoms->atom[n].resind == resind) && (n < atoms->nr)); n++)
+                for (; ((n < atoms->nr) && (atoms->atom[n].resind == resind)); n++)
                 {
                     if (strcmp("CA", *atoms->atomname[n]) == 0)
                     {
@@ -637,7 +644,7 @@ std::vector<IndexGroup> analyse(const t_atoms* atoms, gmx_bool bASK, gmx_bool bV
     int nwater = 0;
     int nion   = 0;
 
-    for (gmx::index i = 0; i < gmx::ssize(indexGroups); i++)
+    for (gmx::Index i = 0; i < gmx::ssize(indexGroups); i++)
     {
         if (!gmx_strcasecmp(indexGroups[i].name.c_str(), "Water"))
         {
@@ -690,6 +697,11 @@ void check_index(const char* gname, int n, int index[], const char* traj, int na
                       index[i] + 1);
         }
     }
+}
+
+std::vector<IndexGroup> init_index(const std::filesystem::path& gfile)
+{
+    return init_index(gfile.string().c_str());
 }
 
 std::vector<IndexGroup> init_index(const char* gfile)
@@ -774,7 +786,7 @@ static int findGroupTemplated(const char* s, gmx::ArrayRef<T> indexGroups)
     int       aa        = -1;
     /* first look for whole name match */
     {
-        for (gmx::index i = 0; i < indexGroups.ssize(); i++)
+        for (gmx::Index i = 0; i < indexGroups.ssize(); i++)
         {
             if (gmx_strcasecmp_min(s, indexGroupName(indexGroups[i])) == 0)
             {
@@ -789,7 +801,7 @@ static int findGroupTemplated(const char* s, gmx::ArrayRef<T> indexGroups)
     /* particleIndices look for first string match */
     if (aa == -1)
     {
-        for (gmx::index i = 0; i < indexGroups.ssize(); i++)
+        for (gmx::Index i = 0; i < indexGroups.ssize(); i++)
         {
             if (gmx_strncasecmp_min(s, indexGroupName(indexGroups[i]), n) == 0)
             {
@@ -809,7 +821,7 @@ static int findGroupTemplated(const char* s, gmx::ArrayRef<T> indexGroups)
         key[STRLEN - 1] = '\0';
         upstring(key);
         minstring(key);
-        for (gmx::index i = 0; i < indexGroups.ssize(); i++)
+        for (gmx::Index i = 0; i < indexGroups.ssize(); i++)
         {
             strncpy(string, indexGroupName(indexGroups[i]), STRLEN - 1);
             upstring(string);
@@ -886,7 +898,7 @@ static void rd_groups(gmx::ArrayRef<const IndexGroup> indexGroups,
     {
         gmx_fatal(FARGS, "Error: no groups in indexfile");
     }
-    for (gmx::index i = 0; i < indexGroups.ssize(); i++)
+    for (gmx::Index i = 0; i < indexGroups.ssize(); i++)
     {
         fprintf(stderr,
                 "Group %5zd (%15s) has %5zd elements\n",
@@ -923,6 +935,11 @@ static void rd_groups(gmx::ArrayRef<const IndexGroup> indexGroups,
     }
 }
 
+void rd_index(const std::filesystem::path& statfile, int ngrps, int isize[], int* index[], char* grpnames[])
+{
+    rd_index(statfile.string().c_str(), ngrps, isize, index, grpnames);
+}
+
 void rd_index(const char* statfile, int ngrps, int isize[], int* index[], char* grpnames[])
 {
     if (!statfile)
@@ -933,6 +950,24 @@ void rd_index(const char* statfile, int ngrps, int isize[], int* index[], char* 
     rd_groups(indexGroups, grpnames, ngrps, isize, index);
 }
 
+void get_index(const t_atoms*                              atoms,
+               const std::optional<std::filesystem::path>& fnm,
+               int                                         ngrps,
+               int                                         isize[],
+               int*                                        index[],
+               char*                                       grpnames[])
+{
+    if (fnm)
+    {
+        get_index(atoms, fnm.value().string().c_str(), ngrps, isize, index, grpnames);
+    }
+    else
+    {
+        get_index(atoms, nullptr, ngrps, isize, index, grpnames);
+    }
+}
+
+// Deprecated, remove and consolidate with the function above when there are no other callers
 void get_index(const t_atoms* atoms, const char* fnm, int ngrps, int isize[], int* index[], char* grpnames[])
 {
     std::vector<IndexGroup> indexGroups;
@@ -958,7 +993,7 @@ t_cluster_ndx cluster_index(FILE* fplog, const char* ndx)
 
     c.clusters                = init_index(ndx);
     c.maxframe                = -1;
-    gmx::index totalNumFrames = 0;
+    gmx::Index totalNumFrames = 0;
     for (const auto& cluster : c.clusters)
     {
         for (const int frame : cluster.particleIndices)

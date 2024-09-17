@@ -35,6 +35,11 @@
 
 #include "gromacs/utility/logger.h"
 
+#include <cstdio>
+
+#include <filesystem>
+#include <string>
+
 #include <gtest/gtest.h>
 
 #include "gromacs/utility/loggerbuilder.h"
@@ -43,6 +48,10 @@
 #include "testutils/stringtest.h"
 #include "testutils/testfilemanager.h"
 
+namespace gmx
+{
+namespace test
+{
 namespace
 {
 
@@ -78,7 +87,7 @@ TEST_F(LoggerTest, LogsToStream)
 TEST_F(LoggerTest, LogsToFile)
 {
     gmx::test::TestFileManager files;
-    std::string                filename(files.getTemporaryFilePath("log.txt").u8string());
+    std::string                filename(files.getTemporaryFilePath("log.txt").string());
     FILE*                      fp = fopen(filename.c_str(), "w");
     {
         gmx::LoggerBuilder builder;
@@ -144,11 +153,11 @@ TEST_F(LoggerTest, LogsToMultipleStreams)
 TEST_F(LoggerTest, LogsToMultipleFiles)
 {
     gmx::test::TestFileManager files;
-    std::string                filename1(files.getTemporaryFilePath("log.txt").u8string());
-    std::string                filename2(files.getTemporaryFilePath("warn.txt").u8string());
-    std::string                filename3(files.getTemporaryFilePath("error.txt").u8string());
-    std::string                filename4(files.getTemporaryFilePath("debug.txt").u8string());
-    std::string                filename5(files.getTemporaryFilePath("verboseDebug.txt").u8string());
+    std::string                filename1(files.getTemporaryFilePath("log.txt").string());
+    std::string                filename2(files.getTemporaryFilePath("warn.txt").string());
+    std::string                filename3(files.getTemporaryFilePath("error.txt").string());
+    std::string                filename4(files.getTemporaryFilePath("debug.txt").string());
+    std::string                filename5(files.getTemporaryFilePath("verboseDebug.txt").string());
     FILE*                      fp1 = fopen(filename1.c_str(), "w");
     FILE*                      fp2 = fopen(filename2.c_str(), "w");
     FILE*                      fp3 = fopen(filename3.c_str(), "w");
@@ -186,7 +195,7 @@ TEST_F(LoggerTest, LogsToStreamAndFile)
 {
     gmx::test::TestFileManager files;
     gmx::StringOutputStream    stream;
-    std::string                filename(files.getTemporaryFilePath("verboseDebug.txt").u8string());
+    std::string                filename(files.getTemporaryFilePath("verboseDebug.txt").string());
     FILE*                      fp = fopen(filename.c_str(), "w");
     {
         gmx::LoggerBuilder builder;
@@ -207,3 +216,5 @@ TEST_F(LoggerTest, LogsToStreamAndFile)
 }
 
 } // namespace
+} // namespace test
+} // namespace gmx

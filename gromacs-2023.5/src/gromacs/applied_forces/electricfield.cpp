@@ -43,14 +43,20 @@
 #include "electricfield.h"
 
 #include <cmath>
+#include <cstdio>
 
+#include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "gromacs/commandline/filenm.h"
 #include "gromacs/fileio/gmxfio.h"
 #include "gromacs/fileio/xvgr.h"
+#include "gromacs/math/functions.h"
 #include "gromacs/math/units.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdtypes/commrec.h"
 #include "gromacs/mdtypes/forceoutput.h"
 #include "gromacs/mdtypes/iforceprovider.h"
@@ -60,14 +66,20 @@
 #include "gromacs/options/basicoptions.h"
 #include "gromacs/options/ioptionscontainerwithsections.h"
 #include "gromacs/options/optionsection.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/keyvaluetreebuilder.h"
 #include "gromacs/utility/keyvaluetreetransform.h"
 #include "gromacs/utility/pleasecite.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/strconvert.h"
+#include "gromacs/utility/stringutil.h"
+
+struct gmx_output_env_t;
 
 namespace gmx
 {
+struct MDModulesNotifiers;
 
 namespace
 {
@@ -109,7 +121,7 @@ public:
 
     /*! \brief Evaluates this field component at given time.
      *
-     * \param[in] t The time to evualate at
+     * \param[in] t The time to evaluate at
      * \return The electric field
      */
     real evaluate(real t) const
@@ -128,7 +140,7 @@ public:
     real a() const { return a_; }
 
 private:
-    //! Coeffient (V / nm)
+    //! Coefficient (V / nm)
     real a_ = 0;
     //! Frequency (1/ps)
     real omega_ = 0;

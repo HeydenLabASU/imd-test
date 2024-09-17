@@ -36,6 +36,7 @@
 #include "ter_db.h"
 
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 
 #include <algorithm>
@@ -51,6 +52,9 @@
 #include "gromacs/gmxpreprocess/h_db.h"
 #include "gromacs/gmxpreprocess/notset.h"
 #include "gromacs/gmxpreprocess/toputil.h"
+#include "gromacs/topology/atoms.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/exceptions.h"
@@ -58,6 +62,7 @@
 #include "gromacs/utility/futil.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/strdb.h"
+#include "gromacs/utility/stringcompare.h"
 #include "gromacs/utility/stringtoenumvalueconverter.h"
 #include "gromacs/utility/stringutil.h"
 
@@ -265,11 +270,11 @@ static void read_ter_db_file(const std::filesystem::path&        fn,
 
             if (!btkw.has_value() && !rtkw.has_value())
             {
-                tbptr->emplace_back(MoleculePatchDatabase());
+                tbptr->emplace_back();
                 block = &tbptr->back();
                 clearModificationBlock(block);
                 block->name     = header;
-                block->filebase = filebase.u8string();
+                block->filebase = filebase.string();
             }
         }
         else
@@ -287,7 +292,7 @@ static void read_ter_db_file(const std::filesystem::path&        fn,
             {
                 /* this is a hack: add/rename/delete atoms */
                 /* make space for hacks */
-                block->hack.emplace_back(MoleculePatch());
+                block->hack.emplace_back();
                 MoleculePatch* hack = &block->hack.back();
 
                 /* get data */
@@ -299,7 +304,7 @@ static void read_ter_db_file(const std::filesystem::path&        fn,
                         gmx_fatal(FARGS,
                                   "Reading Termini Database '%s': "
                                   "expected atom name on line\n%s",
-                                  fn.u8string().c_str(),
+                                  fn.string().c_str(),
                                   line);
                     }
                     hack->oname = buf;
@@ -334,7 +339,7 @@ static void read_ter_db_file(const std::filesystem::path&        fn,
                             gmx_fatal(FARGS,
                                       "Reading Termini Database '%s': don't know which name the "
                                       "new atom should have on line\n%s",
-                                      fn.u8string().c_str(),
+                                      fn.string().c_str(),
                                       line);
                         }
                     }
@@ -358,7 +363,7 @@ static void read_ter_db_file(const std::filesystem::path&        fn,
                         gmx_fatal(FARGS,
                                   "Reading Termini Database '%s': expected %d atom names (found "
                                   "%d) on line\n%s",
-                                  fn.u8string().c_str(),
+                                  fn.string().c_str(),
                                   enumValueToNumIAtoms(*btkw),
                                   j - 1,
                                   line);

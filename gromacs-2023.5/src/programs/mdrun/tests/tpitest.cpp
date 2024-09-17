@@ -42,11 +42,20 @@
  */
 #include "gmxpre.h"
 
+#include <filesystem>
+#include <map>
+#include <string>
+#include <utility>
+
+#include <gtest/gtest.h>
+
 #include "gromacs/utility/stringutil.h"
 #include "gromacs/utility/textreader.h"
 
+#include "testutils/cmdlinetest.h"
 #include "testutils/refdata.h"
 #include "testutils/testasserts.h"
+#include "testutils/testfilemanager.h"
 
 #include "moduletest.h"
 
@@ -76,7 +85,7 @@ void TpiTest::runTest()
     auto        rerunFileName = gmx::test::TestFileManager::getInputFilePath("spc216.gro");
     CommandLine commandLine;
     commandLine.append("-rerun");
-    commandLine.append(rerunFileName.u8string());
+    commandLine.append(rerunFileName.string());
     ASSERT_EQ(0, runner_.callMdrun(commandLine));
 
     const std::string logFileContexts = TextReader::readFileToString(runner_.logFileName_);

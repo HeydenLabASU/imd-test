@@ -34,23 +34,36 @@
 #include "gmxpre.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
+#include <filesystem>
+#include <string>
+
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/fileio/enxio.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/matio.h"
+#include "gromacs/fileio/oenv.h"
+#include "gromacs/fileio/rgb.h"
 #include "gromacs/fileio/trxio.h"
 #include "gromacs/fileio/xvgr.h"
 #include "gromacs/gmxana/gmx_ana.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/math/units.h"
 #include "gromacs/trajectory/energyframe.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/strdb.h"
+
+struct gmx_output_env_t;
 
 
 static int search_str2(int nstr, char** str, char* key)
@@ -610,10 +623,10 @@ int gmx_enemat(int argc, char* argv[])
             if (bFree)
             {
                 fprintf(out, "%s%d%s \"%s\"\n", str1, j++, str2, "Free");
-            }
-            if (bFree)
-            {
-                fprintf(out, "%s%d%s \"%s\"\n", str1, j++, str2, "Diff");
+                if (bRef)
+                {
+                    fprintf(out, "%s%d%s \"%s\"\n", str1, j++, str2, "Diff");
+                }
             }
             fprintf(out, "@TYPE xy\n");
             fprintf(out, "#%3s", "grp");
@@ -628,10 +641,10 @@ int gmx_enemat(int argc, char* argv[])
             if (bFree)
             {
                 fprintf(out, " %9s", "Free");
-            }
-            if (bFree)
-            {
-                fprintf(out, " %9s", "Diff");
+                if (bRef)
+                {
+                    fprintf(out, " %9s", "Diff");
+                }
             }
             fprintf(out, "\n");
         }
@@ -648,10 +661,10 @@ int gmx_enemat(int argc, char* argv[])
             if (bFree)
             {
                 fprintf(out, " %9.5g", efree[i]);
-            }
-            if (bRef)
-            {
-                fprintf(out, " %9.5g", edif[i]);
+                if (bRef)
+                {
+                    fprintf(out, " %9.5g", edif[i]);
+                }
             }
             fprintf(out, "\n");
         }

@@ -34,15 +34,22 @@
 #include "gmxpre.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 #include <algorithm>
+#include <filesystem>
+#include <string>
 #include <vector>
 
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/commandline/viewit.h"
 #include "gromacs/fileio/confio.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/matio.h"
+#include "gromacs/fileio/oenv.h"
+#include "gromacs/fileio/rgb.h"
 #include "gromacs/fileio/trxio.h"
 #include "gromacs/fileio/xvgr.h"
 #include "gromacs/gmxana/cmat.h"
@@ -53,15 +60,24 @@
 #include "gromacs/math/units.h"
 #include "gromacs/math/utilities.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/pbcutil/rmpbc.h"
+#include "gromacs/topology/atoms.h"
+#include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/index.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
 #include "gromacs/utility/pleasecite.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
+
+enum class PbcType : int;
+struct gmx_output_env_t;
 
 static void norm_princ(const t_atoms* atoms, int isize, int* index, int natoms, rvec* x)
 {
@@ -305,7 +321,7 @@ int gmx_rms(int argc, char* argv[])
         fprintf(stderr,
                 "WARNING: using option -prev with large trajectories will\n"
                 "         require a lot of memory and could lead to crashes\n");
-        prev = abs(prev);
+        prev = std::abs(prev);
         if (freq != 1)
         {
             fprintf(stderr, "WARNING: option -skip also applies to -prev\n");
@@ -444,7 +460,7 @@ int gmx_rms(int argc, char* argv[])
     if (bPBC)
     {
         gpbc = gmx_rmpbc_init(&top.idef, pbcType, top.atoms.nr);
-        gmx_rmpbc(gpbc, top.atoms.nr, box, xp);
+        gmx_rmpbc_apply(gpbc, top.atoms.nr, box, xp);
     }
     if (bReset)
     {
@@ -586,7 +602,7 @@ int gmx_rms(int argc, char* argv[])
     {
         if (bPBC)
         {
-            gmx_rmpbc(gpbc, natoms, box, x);
+            gmx_rmpbc_apply(gpbc, natoms, box, x);
         }
 
         if (bReset)
@@ -715,7 +731,7 @@ int gmx_rms(int argc, char* argv[])
         {
             if (bPBC)
             {
-                gmx_rmpbc(gpbc, natoms, box, x);
+                gmx_rmpbc_apply(gpbc, natoms, box, x);
             }
 
             if (bReset)

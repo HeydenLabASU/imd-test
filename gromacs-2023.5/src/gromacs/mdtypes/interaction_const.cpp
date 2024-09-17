@@ -35,7 +35,11 @@
 
 #include "interaction_const.h"
 
+#include <cmath>
 #include <cstdio>
+
+#include <filesystem>
+#include <string>
 
 #include "gromacs/ewald/ewald_utils.h"
 #include "gromacs/math/functions.h"
@@ -43,8 +47,13 @@
 #include "gromacs/mdlib/rf_util.h"
 #include "gromacs/mdtypes/forcerec.h"
 #include "gromacs/mdtypes/inputrec.h"
+#include "gromacs/topology/atoms.h"
+#include "gromacs/topology/forcefieldparameters.h"
+#include "gromacs/topology/idef.h"
+#include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/pleasecite.h"
 
 interaction_const_t::SoftCoreParameters::SoftCoreParameters(const t_lambda& fepvals) :
@@ -223,9 +232,9 @@ static void force_switch_constants(real p, real rsw, real rc, shift_consts_t* sc
      * force/p   = r^-(p+1) + c2*r^2 + c3*r^3
      * potential = r^-p + c2/3*r^3 + c3/4*r^4 + cpot
      */
-    sc->c2   = ((p + 1) * rsw - (p + 4) * rc) / (pow(rc, p + 2) * gmx::square(rc - rsw));
-    sc->c3   = -((p + 1) * rsw - (p + 3) * rc) / (pow(rc, p + 2) * gmx::power3(rc - rsw));
-    sc->cpot = -pow(rc, -p) + p * sc->c2 / 3 * gmx::power3(rc - rsw)
+    sc->c2   = ((p + 1) * rsw - (p + 4) * rc) / (std::pow(rc, p + 2) * gmx::square(rc - rsw));
+    sc->c3   = -((p + 1) * rsw - (p + 3) * rc) / (std::pow(rc, p + 2) * gmx::power3(rc - rsw));
+    sc->cpot = -std::pow(rc, -p) + p * sc->c2 / 3 * gmx::power3(rc - rsw)
                + p * sc->c3 / 4 * gmx::power4(rc - rsw);
 }
 
@@ -371,7 +380,7 @@ interaction_const_t init_interaction_const(FILE* fp, const t_inputrec& ir, const
 
     if (ir.efep != FreeEnergyPerturbationType::No)
     {
-        GMX_RELEASE_ASSERT(ir.fepvals, "ir.fepvals should be set wth free-energy");
+        GMX_RELEASE_ASSERT(ir.fepvals, "ir.fepvals should be set with free-energy");
         interactionConst.softCoreParameters =
                 std::make_unique<interaction_const_t::SoftCoreParameters>(*ir.fepvals);
     }

@@ -34,25 +34,35 @@
 #include "gmxpre.h"
 
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
+#include <string>
+#include <vector>
 
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/commandline/viewit.h"
 #include "gromacs/correlationfunctions/autocorr.h"
 #include "gromacs/fileio/enxio.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/gmxfio.h"
+#include "gromacs/fileio/oenv.h"
 #include "gromacs/fileio/tpxio.h"
 #include "gromacs/fileio/trxio.h"
+#include "gromacs/fileio/xdr_datatype.h"
 #include "gromacs/fileio/xvgr.h"
 #include "gromacs/gmxana/gmx_ana.h"
 #include "gromacs/gmxana/gstat.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/math/units.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdlib/energyoutput.h"
 #include "gromacs/mdtypes/inputrec.h"
 #include "gromacs/mdtypes/md_enums.h"
@@ -63,13 +73,18 @@
 #include "gromacs/trajectory/energyframe.h"
 #include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
+#include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/pleasecite.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/strconvert.h"
 #include "gromacs/utility/stringutil.h"
+
+struct gmx_output_env_t;
 
 static const int NOTSET = -23451;
 
@@ -318,60 +333,95 @@ static void get_dhdl_parms(const char* topnm, t_inputrec* ir)
     read_tpx(topnm, ir, box, &natoms, nullptr, nullptr, &mtop);
 }
 
+// Computes and writes the shear viscosity using the Einstein relation
 static void einstein_visco(const char*             fn,
                            const char*             fni,
                            int                     nsets,
-                           int                     nint,
-                           real**                  eneint,
-                           real                    V,
-                           real                    T,
+                           const enerdata_t&       edat,
+                           const real              volume,
+                           const real              temperature,
+                           const int               numRestarts,
+                           const int               numBlocks,
                            double                  dt,
                            const gmx_output_env_t* oenv)
 {
-    FILE * fp0, *fp1;
-    double av[4], avold[4];
-    double fac, di;
-    int    i, j, m, nf4;
+    constexpr int c_numSets = 3;
 
-    nf4 = nint / 4 + 1;
+    GMX_RELEASE_ASSERT(nsets == c_numSets, "Only nsets=3 is currently supported");
 
-    for (i = 0; i <= nsets; i++)
+    /* Determine integrals of the off-diagonal pressure elements */
+    const int                          nint = edat.nframes + 1;
+    std::array<std::vector<double>, 3> eneint;
+    for (int i = 0; i < c_numSets; i++)
     {
-        avold[i] = 0;
+        eneint[i].resize(nint, 0.0);
     }
-    fp0 = xvgropen(fni, "Shear viscosity integral", "Time (ps)", "(kg m\\S-1\\N s\\S-1\\N ps)", oenv);
-    fp1 = xvgropen(
-            fn, "Shear viscosity using Einstein relation", "Time (ps)", "(kg m\\S-1\\N s\\S-1\\N)", oenv);
-    for (i = 0; i < nf4; i++)
+    for (int i = 0; i < edat.nframes; i++)
     {
-        for (m = 0; m <= nsets; m++)
+        const double fac = dt / edat.points[i];
+        eneint[0][i + 1] = eneint[0][i] + 0.5 * (edat.s[1].es[i].sum + edat.s[3].es[i].sum) * fac;
+        eneint[1][i + 1] = eneint[1][i] + 0.5 * (edat.s[2].es[i].sum + edat.s[6].es[i].sum) * fac;
+        eneint[2][i + 1] = eneint[2][i] + 0.5 * (edat.s[5].es[i].sum + edat.s[7].es[i].sum) * fac;
+    }
+
+    if (numBlocks <= 0)
+    {
+        GMX_THROW(
+                gmx::InvalidInputError("The number of averaging blocks for computing the viscosity "
+                                       "using Einstein should be positive"));
+    }
+
+    const int nintBlock = nint / numBlocks + 1;
+
+    if (numRestarts <= 0)
+    {
+        GMX_THROW(
+                gmx::InvalidInputError("The number of restarts for computing the viscosity using "
+                                       "Einstein should be positive"));
+    }
+
+    const int stepSize = std::max(nintBlock / numRestarts, 1);
+
+    printf("\n");
+    printf("Computing shear viscosity using the Einstein relation with %d start points separated "
+           "by %g ps\n",
+           gmx::divideRoundUp(nintBlock, stepSize),
+           stepSize * dt);
+
+
+    std::array<double, c_numSets + 1> avold = { 0.0 };
+
+    FILE* fp0 = xvgropen(fni, "Shear viscosity integral", "Time (ps)", "(kg m\\S-1\\N s\\S-1\\N ps)", oenv);
+    FILE* fp1 = xvgropen(
+            fn, "Shear viscosity using Einstein relation", "Time (ps)", "(kg m\\S-1\\N s\\S-1\\N)", oenv);
+    for (int i = 0; i < nintBlock; i += stepSize)
+    {
+        std::array<double, c_numSets + 1> av = { 0.0 };
+
+        for (int m = 0; m < c_numSets; m++)
         {
-            av[m] = 0;
-        }
-        for (j = 0; j < nint - i; j++)
-        {
-            for (m = 0; m < nsets; m++)
+            for (int j = 0; j < nint - i; j++)
             {
-                di = gmx::square(eneint[m][j + i] - eneint[m][j]);
+                double di = gmx::square(eneint[m][j + i] - eneint[m][j]);
 
                 av[m] += di;
-                av[nsets] += di / nsets;
+                av[c_numSets] += di / c_numSets;
             }
         }
         /* Convert to SI for the viscosity */
-        fac = (V * gmx::c_nano * gmx::c_nano * gmx::c_nano * gmx::c_pico * 1e10)
-              / (2 * gmx::c_boltzmann * T) / (nint - i);
+        const double fac = (volume * gmx::c_nano * gmx::c_nano * gmx::c_nano * gmx::c_pico * 1e10)
+                           / (2 * gmx::c_boltzmann * temperature) / (nint - i);
         fprintf(fp0, "%10g", i * dt);
-        for (m = 0; (m <= nsets); m++)
+        for (int m = 0; m <= c_numSets; m++)
         {
             av[m] = fac * av[m];
             fprintf(fp0, "  %10g", av[m]);
         }
         fprintf(fp0, "\n");
         fprintf(fp1, "%10g", (i + 0.5) * dt);
-        for (m = 0; (m <= nsets); m++)
+        for (int m = 0; m <= c_numSets; m++)
         {
-            fprintf(fp1, "  %10g", (av[m] - avold[m]) / dt);
+            fprintf(fp1, "  %10g", (av[m] - avold[m]) / (stepSize * dt));
             avold[m] = av[m];
         }
         fprintf(fp1, "\n");
@@ -864,7 +914,7 @@ if (tt != NOTSET)
     {
         fprintf(fp, "Cp-Cv                                    =  %10g J/(mol K)\n", dcp);
     }
-    please_cite(fp, "Allen1987a");
+    please_cite(fp, "Allen2017");
 }
 else
 {
@@ -879,7 +929,10 @@ static void analyse_ener(gmx_bool                         bCorr,
                          gmx_bool                         bFee,
                          gmx_bool                         bSum,
                          gmx_bool                         bFluct,
-                         gmx_bool                         bVisco,
+                         const bool                       computeACViscosity,
+                         const bool                       computeEinsteinViscosity,
+                         const int                        einsteinRestarts,
+                         const int                        einsteinBlocks,
                          const char*                      visfn,
                          int                              nmol,
                          int64_t                          start_step,
@@ -1113,12 +1166,11 @@ static void analyse_ener(gmx_bool                         bCorr,
         {
             Dt = 0;
         }
-        if (bVisco)
+        if (computeACViscosity || computeEinsteinViscosity)
         {
             std::array<std::string, 2> localLeg = { "Shear", "Bulk" };
             real                       factor;
             real**                     eneset;
-            real**                     eneint;
 
             /* Assume pressure tensor is in Pxx Pxy Pxz Pyx Pyy Pyz Pzx Pzy Pzz */
 
@@ -1142,94 +1194,73 @@ static void analyse_ener(gmx_bool                         bCorr,
                 eneset[11][i] -= Pres;
             }
 
-            /* Determine integrals of the off-diagonal pressure elements */
-            snew(eneint, 3);
-            for (i = 0; i < 3; i++)
+            if (computeEinsteinViscosity)
             {
-                snew(eneint[i], edat->nframes + 1);
-            }
-            eneint[0][0] = 0;
-            eneint[1][0] = 0;
-            eneint[2][0] = 0;
-            for (i = 0; i < edat->nframes; i++)
-            {
-                eneint[0][i + 1] =
-                        eneint[0][i]
-                        + 0.5 * (edat->s[1].es[i].sum + edat->s[3].es[i].sum) * Dt / edat->points[i];
-                eneint[1][i + 1] =
-                        eneint[1][i]
-                        + 0.5 * (edat->s[2].es[i].sum + edat->s[6].es[i].sum) * Dt / edat->points[i];
-                eneint[2][i + 1] =
-                        eneint[2][i]
-                        + 0.5 * (edat->s[5].es[i].sum + edat->s[7].es[i].sum) * Dt / edat->points[i];
+                einstein_visco(
+                        eviscofn, eviscoifn, 3, *edat, Vaver, Temp, einsteinRestarts, einsteinBlocks, Dt, oenv);
             }
 
-            einstein_visco(eviscofn, eviscoifn, 3, edat->nframes + 1, eneint, Vaver, Temp, Dt, oenv);
-
-            for (i = 0; i < 3; i++)
+            if (computeACViscosity)
             {
-                sfree(eneint[i]);
+                /*do_autocorr(corrfn,buf,nenergy,3,eneset,Dt,eacNormal,TRUE);*/
+                /* Do it for shear viscosity */
+                std::strcpy(buf, "Shear Viscosity");
+                low_do_autocorr(corrfn,
+                                oenv,
+                                buf,
+                                edat->nframes,
+                                3,
+                                (edat->nframes + 1) / 2,
+                                eneset,
+                                Dt,
+                                eacNormal,
+                                1,
+                                TRUE,
+                                FALSE,
+                                FALSE,
+                                0.0,
+                                0.0,
+                                0);
+
+                /* Now for bulk viscosity */
+                std::strcpy(buf, "Bulk Viscosity");
+                low_do_autocorr(corrfn,
+                                oenv,
+                                buf,
+                                edat->nframes,
+                                1,
+                                (edat->nframes + 1) / 2,
+                                &(eneset[11]),
+                                Dt,
+                                eacNormal,
+                                1,
+                                TRUE,
+                                FALSE,
+                                FALSE,
+                                0.0,
+                                0.0,
+                                0);
+
+                factor = (Vaver * 1e-26 / (gmx::c_boltzmann * Temp)) * Dt;
+                fp     = xvgropen(visfn, buf, "Time (ps)", "\\8h\\4 (cp)", oenv);
+                xvgrLegend(fp, localLeg, oenv);
+
+                /* Use trapezium rule for integration */
+                integral = 0;
+                intBulk  = 0;
+                nout     = get_acfnout();
+                if ((nout < 2) || (nout >= edat->nframes / 2))
+                {
+                    nout = edat->nframes / 2;
+                }
+                for (i = 1; (i < nout); i++)
+                {
+                    integral += 0.5 * (eneset[0][i - 1] + eneset[0][i]) * factor;
+                    intBulk += 0.5 * (eneset[11][i - 1] + eneset[11][i]) * factor;
+                    fprintf(fp, "%10g  %10g  %10g\n", (i * Dt), integral, intBulk);
+                }
+                xvgrclose(fp);
             }
-            sfree(eneint);
-
-            /*do_autocorr(corrfn,buf,nenergy,3,eneset,Dt,eacNormal,TRUE);*/
-            /* Do it for shear viscosity */
-            std::strcpy(buf, "Shear Viscosity");
-            low_do_autocorr(corrfn,
-                            oenv,
-                            buf,
-                            edat->nframes,
-                            3,
-                            (edat->nframes + 1) / 2,
-                            eneset,
-                            Dt,
-                            eacNormal,
-                            1,
-                            TRUE,
-                            FALSE,
-                            FALSE,
-                            0.0,
-                            0.0,
-                            0);
-
-            /* Now for bulk viscosity */
-            std::strcpy(buf, "Bulk Viscosity");
-            low_do_autocorr(corrfn,
-                            oenv,
-                            buf,
-                            edat->nframes,
-                            1,
-                            (edat->nframes + 1) / 2,
-                            &(eneset[11]),
-                            Dt,
-                            eacNormal,
-                            1,
-                            TRUE,
-                            FALSE,
-                            FALSE,
-                            0.0,
-                            0.0,
-                            0);
-
-            factor = (Vaver * 1e-26 / (gmx::c_boltzmann * Temp)) * Dt;
-            fp     = xvgropen(visfn, buf, "Time (ps)", "\\8h\\4 (cp)", oenv);
-            xvgrLegend(fp, localLeg, oenv);
-
-            /* Use trapezium rule for integration */
-            integral = 0;
-            intBulk  = 0;
-            nout     = get_acfnout();
-            if ((nout < 2) || (nout >= edat->nframes / 2))
-            {
-                nout = edat->nframes / 2;
-            }
-            for (i = 1; (i < nout); i++)
-            {
-                integral += 0.5 * (eneset[0][i - 1] + eneset[0][i]) * factor;
-                intBulk += 0.5 * (eneset[11][i - 1] + eneset[11][i]) * factor;
-                fprintf(fp, "%10g  %10g  %10g\n", (i * Dt), integral, intBulk);
-            }
-            xvgrclose(fp);
 
             for (i = 0; i < 12; i++)
             {
@@ -1729,14 +1760,28 @@ int gmx_energy(int argc, char* argv[])
         "where E[SUB]A[sub] and E[SUB]B[sub] are the energies from the first and second energy",
         "files, and the average is over the ensemble A. The running average",
         "of the free energy difference is printed to a file specified by [TT]-ravg[tt].",
-        "[BB]Note[bb] that the energies must both be calculated from the same trajectory."
+        "[BB]Note[bb] that the energies must both be calculated from the same trajectory.[PAR]",
 
+        "For liquids, viscosities can be calculated by integrating the auto-correlation function ",
+        "of, or by using the Einstein formula for, the off-diagonal pressure elements. ",
+        "The option [TT]-vis[tt] turns calculation of the shear and bulk viscosity through ",
+        "integration of the auto-correlation function. For accurate results, this requires ",
+        "extremely frequent computation and output of the pressure tensor. ",
+        "The Einstein formula does not require frequent output and is therefore more convenient. ",
+        "Note that frequent pressure calculation (nstcalcenergy mdp parameter) is still needed. ",
+        "Option [TT]-evicso[tt] gives this shear viscosity estimate and option [TT]-eviscoi[tt] ",
+        "the integral. Using one of these two options also triggers the other. ",
+        "The viscosity is computed from integrals averaged over uniformly distributed ",
+        "[TT]-einstein_restarts[tt] starting points, which are sampled over one block out of ",
+        "[TT]-einstein_blocks[tt] of the trajectory."
     };
     static gmx_bool bSum = FALSE, bFee = FALSE, bPrAll = FALSE, bFluct = FALSE, bDriftCorr = FALSE;
     static gmx_bool bDp = FALSE, bMutot = FALSE, bOrinst = FALSE, bOvec = FALSE, bFluctProps = FALSE;
     static int      nmol = 1, nbmin = 5, nbmax = 5;
     static real     reftemp = 300.0, ezero = 0;
-    t_pargs         pa[] = {
+    static int      einsteinRestarts = 100;
+    static int      einsteinBlocks   = 4;
+    t_pargs         pa[]             = {
         { "-fee", FALSE, etBOOL, { &bFee }, "Do a free energy estimate" },
         { "-fetemp",
           FALSE,
@@ -1785,7 +1830,17 @@ int gmx_energy(int argc, char* argv[])
           { &bFluct },
           "Calculate autocorrelation of energy fluctuations rather than energy itself" },
         { "-orinst", FALSE, etBOOL, { &bOrinst }, "Analyse instantaneous orientation data" },
-        { "-ovec", FALSE, etBOOL, { &bOvec }, "Also plot the eigenvectors with [TT]-oten[tt]" }
+        { "-ovec", FALSE, etBOOL, { &bOvec }, "Also plot the eigenvectors with [TT]-oten[tt]" },
+        { "-einstein_restarts",
+          FALSE,
+          etINT,
+          { &einsteinRestarts },
+          "Number of restarts for computing the viscosity using the Einstein relation" },
+        { "-einstein_blocks",
+          FALSE,
+          etINT,
+          { &einsteinBlocks },
+          "Number of averaging windows for computing the viscosity using the Einstein relation" }
     };
     static const char* setnm[] = { "Pres-XX", "Pres-XY",     "Pres-XZ", "Pres-YX",
                                    "Pres-YY", "Pres-YZ",     "Pres-ZX", "Pres-ZY",
@@ -1804,7 +1859,7 @@ int gmx_energy(int argc, char* argv[])
     int64_t                  start_step;
     real                     start_t;
     gmx_bool                 bDHDL;
-    gmx_bool                 bFoundStart, bCont, bVisco;
+    gmx_bool                 bFoundStart, bCont;
     double                   sum, dbl;
     double*                  time = nullptr;
     real                     Vaver;
@@ -1846,14 +1901,17 @@ int gmx_energy(int argc, char* argv[])
 
     Vaver = -1;
 
-    bVisco = opt2bSet("-vis", NFILE, fnm);
+    const bool computeACViscosity = opt2bSet("-vis", NFILE, fnm);
+    // Assign 'true' if either -evisco or -eviscoi flags are specified
+    const bool computeEinsteinViscosity =
+            opt2bSet("-evisco", NFILE, fnm) || opt2bSet("-eviscoi", NFILE, fnm);
 
     t_inputrec  irInstance;
     t_inputrec* ir = &irInstance;
 
     if (!bDHDL)
     {
-        if (bVisco)
+        if (computeACViscosity || computeEinsteinViscosity)
         {
             nset = asize(setnm);
             snew(set, nset);
@@ -1876,6 +1934,11 @@ int gmx_energy(int argc, char* argv[])
                         if (1 != scanf("%lf", &dbl))
                         {
                             gmx_fatal(FARGS, "Error reading user input");
+                        }
+                        if (dbl <= 0)
+                        {
+                            GMX_THROW(gmx::InvalidInputError(
+                                    "The box volume needs to be a positive real number."));
                         }
                         Vaver = dbl;
                     }
@@ -2178,7 +2241,10 @@ int gmx_energy(int argc, char* argv[])
                      bFee,
                      bSum,
                      bFluct,
-                     bVisco,
+                     computeACViscosity,
+                     computeEinsteinViscosity,
+                     einsteinRestarts,
+                     einsteinBlocks,
                      opt2fn("-vis", NFILE, fnm),
                      nmol,
                      start_step,

@@ -36,16 +36,20 @@
 #include "coupling.h"
 
 #include <cassert>
+#include <cinttypes>
 #include <cmath>
 
 #include <algorithm>
+#include <filesystem>
 #include <numeric>
+#include <string>
 
 #include "gromacs/domdec/domdec_struct.h"
 #include "gromacs/gmxlib/nrnb.h"
 #include "gromacs/math/boxmatrix.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/math/invertmatrix.h"
+#include "gromacs/math/multidimarray.h"
 #include "gromacs/math/units.h"
 #include "gromacs/math/vec.h"
 #include "gromacs/math/vecdump.h"
@@ -54,6 +58,8 @@
 #include "gromacs/mdlib/gmx_omp_nthreads.h"
 #include "gromacs/mdlib/stat.h"
 #include "gromacs/mdlib/update.h"
+#include "gromacs/mdspan/extents.h"
+#include "gromacs/mdspan/layouts.h"
 #include "gromacs/mdtypes/commrec.h"
 #include "gromacs/mdtypes/enerdata.h"
 #include "gromacs/mdtypes/group.h"
@@ -64,14 +70,20 @@
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/random/gammadistribution.h"
 #include "gromacs/random/normaldistribution.h"
+#include "gromacs/random/seed.h"
 #include "gromacs/random/tabulatednormaldistribution.h"
 #include "gromacs/random/threefry.h"
 #include "gromacs/random/uniformrealdistribution.h"
+#include "gromacs/topology/ifunc.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/logger.h"
 #include "gromacs/utility/pleasecite.h"
 #include "gromacs/utility/smalloc.h"
+#include "gromacs/utility/stringutil.h"
 
 #define NTROTTERPARTS 3
 
@@ -384,9 +396,8 @@ void update_pcouple_after_coordinates(FILE*                               fplog,
 
     if (boxDeformation)
     {
-        auto localX   = makeArrayRef(state->x).subArray(start, homenr);
         auto localBox = gmx::createMatrix3x3FromLegacyMatrix(state->box);
-        boxDeformation->apply(localX, &localBox, step);
+        boxDeformation->apply(&localBox, step);
         fillLegacyMatrix(localBox, state->box);
     }
 }
@@ -524,11 +535,11 @@ static void NHC_trotter(const t_grpopts*      opts,
                 ivxi[nh - 1] += 0.25 * dt * GQ[nh - 1];
                 for (j = nh - 1; j > 0; j--)
                 {
-                    Efac        = exp(-0.125 * dt * ivxi[j]);
+                    Efac        = std::exp(-0.125 * dt * ivxi[j]);
                     ivxi[j - 1] = Efac * (ivxi[j - 1] * Efac + 0.25 * dt * GQ[j - 1]);
                 }
 
-                Efac = exp(-0.5 * dt * ivxi[0]);
+                Efac = std::exp(-0.5 * dt * ivxi[0]);
                 if (bBarostat)
                 {
                     *veta *= Efac;
@@ -553,7 +564,7 @@ static void NHC_trotter(const t_grpopts*      opts,
 
                 for (j = 0; j < nh - 1; j++)
                 {
-                    Efac    = exp(-0.125 * dt * ivxi[j + 1]);
+                    Efac    = std::exp(-0.125 * dt * ivxi[j + 1]);
                     ivxi[j] = Efac * (ivxi[j] * Efac + 0.25 * dt * GQ[j]);
                     if (iQinv[j + 1] > 0)
                     {
@@ -577,7 +588,6 @@ static void boxv_trotter(const t_inputrec*     ir,
                          const tensor          box,
                          const gmx_ekindata_t* ekind,
                          const tensor          vir,
-                         real                  pcorr,
                          const t_extmass*      MassQ)
 {
 
@@ -618,7 +628,7 @@ static void boxv_trotter(const t_inputrec*     ir,
     /* for now, we use Elr = 0, because if you want to get it right, you
        really should be using PME. Maybe print a warning? */
 
-    pscal = calc_pres(ir->pbcType, nwall, box, ekinmod, vir, localpres) + pcorr;
+    pscal = calc_pres(ir->pbcType, nwall, box, ekinmod, vir, localpres);
 
     vol = det(box);
     GW  = (vol * (MassQ->Winv / gmx::c_presfac))
@@ -704,22 +714,21 @@ static void calcParrinelloRahmanInvMass(const PressureCouplingOptions& pressureC
     }
 }
 
-/*! \brief Calculate the M tensor for Parrinello-Rahman pressure coupling
+/*! \brief Returns the product of an inverse box matrix with a box or box velocity matrix
  *
- * M is used in the update code to couple the change in particle
- * velocities to that of the box vectors introduced by mu (see \c
- * calculateMu()).
+ * The result has off-diagonal elements exactly zero when the compressibility
+ * matrix has off-diagonal elements that are all exactly zero.
  */
-static Matrix3x3 calculateM(const PressureCouplingOptions& pressureCouplingOptions,
-                            const Matrix3x3&               invbox,
-                            const Matrix3x3&               boxv)
+static Matrix3x3 productOfInvBoxAndBoxMatrix(const PressureCouplingOptions& pressureCouplingOptions,
+                                             const Matrix3x3&               invbox,
+                                             const Matrix3x3&               box)
 
 {
     Matrix3x3 M;
 
     if (TRICLINIC(pressureCouplingOptions.compress))
     {
-        M = multiplyBoxMatrices(invbox, boxv);
+        M = multiplyBoxMatrices(invbox, box);
     }
     else
     {
@@ -727,7 +736,7 @@ static Matrix3x3 calculateM(const PressureCouplingOptions& pressureCouplingOptio
         M = { { 0._real } };
         for (int d = 0; d < DIM; d++)
         {
-            M(d, d) = invbox(d, d) * boxv(d, d);
+            M(d, d) = invbox(d, d) * box(d, d);
         }
     }
 
@@ -759,22 +768,8 @@ static Matrix3x3 calculateMu(const PressureCouplingOptions& pressureCouplingOpti
     preserveBoxShape(pressureCouplingOptions, deform, box_rel, temp);
     // Now temp is the box at t+dt, determine mu as the relative
     // change in the box.
-    Matrix3x3 mu;
-    if (TRICLINIC(pressureCouplingOptions.compress))
-    {
-        mu = multiplyBoxMatrices(invbox, temp);
-    }
-    else
-    {
-        // Compute only the diagonal elements to avoid non-zero off-diagonal due to rounding
-        mu = { { 0._real } };
-        for (int d = 0; d < DIM; d++)
-        {
-            mu(d, d) = invbox(d, d) * temp[d][d];
-        }
-    }
-
-    return mu;
+    return productOfInvBoxAndBoxMatrix(
+            pressureCouplingOptions, invbox, gmx::createMatrix3x3FromLegacyMatrix(temp));
 }
 
 void init_parrinellorahman(const PressureCouplingOptions& pressureCouplingOptions,
@@ -788,7 +783,8 @@ void init_parrinellorahman(const PressureCouplingOptions& pressureCouplingOption
 {
     const Matrix3x3 inverseBox = gmx::invertBoxMatrix(gmx::createMatrix3x3FromLegacyMatrix(box));
     preserveBoxShape(pressureCouplingOptions, deform, box_rel, boxv);
-    *M = calculateM(pressureCouplingOptions, inverseBox, gmx::createMatrix3x3FromLegacyMatrix(boxv));
+    *M = productOfInvBoxAndBoxMatrix(
+            pressureCouplingOptions, inverseBox, gmx::createMatrix3x3FromLegacyMatrix(boxv));
     *mu = calculateMu(pressureCouplingOptions, deform, box_rel, box, inverseBox, boxv, couplingTimePeriod);
 }
 
@@ -949,7 +945,8 @@ void parrinellorahman_pcoupl(const gmx::MDLogger&           mdlog,
     preserveBoxShape(pressureCouplingOptions, deform, box_rel, boxv);
 
     const Matrix3x3 inverseBox = gmx::createMatrix3x3FromLegacyMatrix(invbox);
-    *M = calculateM(pressureCouplingOptions, inverseBox, gmx::createMatrix3x3FromLegacyMatrix(boxv));
+    *M                         = productOfInvBoxAndBoxMatrix(
+            pressureCouplingOptions, inverseBox, gmx::createMatrix3x3FromLegacyMatrix(boxv));
 
     *mu = calculateMu(pressureCouplingOptions, deform, box_rel, box, inverseBox, boxv, couplingTimePeriod);
 }
@@ -1516,7 +1513,6 @@ static void nosehoover_tcoupl(const gmx_ekindata_t& ekind,
 void trotter_update(const t_inputrec*                   ir,
                     int64_t                             step,
                     gmx_ekindata_t*                     ekind,
-                    const gmx_enerdata_t*               enerd,
                     t_state*                            state,
                     const tensor                        vir,
                     int                                 homenr,
@@ -1584,7 +1580,7 @@ void trotter_update(const t_inputrec*                   ir,
         {
             case etrtBAROV:
             case etrtBAROV2:
-                boxv_trotter(ir, &(state->veta), dt, state->box, ekind, vir, enerd->term[F_PDISPCORR], MassQ);
+                boxv_trotter(ir, &(state->veta), dt, state->box, ekind, vir, MassQ);
                 break;
             case etrtBARONHC:
             case etrtBARONHC2:
@@ -2183,7 +2179,7 @@ real vrescale_resamplekin(real kk, real sigma, real ndeg, real taut, int64_t ste
 
     if (taut > 0.1)
     {
-        factor = exp(-1.0 / taut);
+        factor = std::exp(-1.0 / taut);
     }
     else
     {

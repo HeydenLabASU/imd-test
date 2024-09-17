@@ -36,20 +36,34 @@
 #include "gromacs/topology/topology.h"
 
 #include <cstdio>
+#include <cstdlib>
 
 #include <algorithm>
+#include <array>
+#include <limits>
+#include <memory>
+#include <string>
+#include <vector>
 
 #include "gromacs/math/vecdump.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/topology/atoms.h"
+#include "gromacs/topology/block.h"
+#include "gromacs/topology/forcefieldparameters.h"
 #include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/symtab.h"
+#include "gromacs/topology/topology_enums.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/compare.h"
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/listoflists.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/strconvert.h"
+#include "gromacs/utility/stringutil.h"
 #include "gromacs/utility/txtdump.h"
 
 const char* shortName(SimulationAtomGroupType type)
@@ -580,7 +594,7 @@ static void compareMoltypes(FILE*                              fp,
 static void compareMoletypeAB(FILE* fp, gmx::ArrayRef<const gmx_moltype_t> mt1, real relativeTolerance, real absoluteTolerance)
 {
     fprintf(fp, "comparing free energy molecule types\n");
-    for (gmx::index i = 0; i < mt1.ssize(); i++)
+    for (gmx::Index i = 0; i < mt1.ssize(); i++)
     {
         compareAtoms(fp, &mt1[i].atoms, nullptr, relativeTolerance, absoluteTolerance);
     }
@@ -673,7 +687,7 @@ void compareAtomGroups(FILE* fp, const SimulationGroups& g0, const SimulationGro
         cmp_int(fp, buf.c_str(), -1, g0.groups[group].size(), g1.groups[group].size());
         if (g0.groups[group].size() == g1.groups[group].size())
         {
-            for (gmx::index j = 0; j < gmx::ssize(g0.groups[group]); j++)
+            for (gmx::Index j = 0; j < gmx::ssize(g0.groups[group]); j++)
             {
                 buf = gmx::formatString("grps[%d].name[%zd]", static_cast<int>(group), j);
                 cmp_str(fp,

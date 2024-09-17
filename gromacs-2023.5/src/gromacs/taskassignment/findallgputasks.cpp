@@ -44,7 +44,10 @@
 
 #include "config.h"
 
+#include <filesystem>
+#include <iterator>
 #include <numeric>
+#include <type_traits>
 #include <vector>
 
 #include "gromacs/taskassignment/decidegpuusage.h"
@@ -181,18 +184,20 @@ std::vector<GpuTask> allgatherv(ArrayRef<const GpuTask> input,
         // thread-MPI segfaults with 1 rank and with zero totalExtent.
 #if GMX_MPI
         int root = 0;
-        // Calling a C API with the const T * from data() doesn't seem to compile reliably.
-        // TODO Make an allgatherv template to deal with this nonsense.
-        MPI_Gatherv(const_cast<GpuTask*>(input.data()),
+        MPI_Gatherv(reinterpret_cast<std::underlying_type_t<GpuTask>*>(const_cast<GpuTask*>(input.data())),
                     input.size(),
                     MPI_INT,
-                    const_cast<GpuTask*>(result.data()),
+                    reinterpret_cast<std::underlying_type_t<GpuTask>*>(result.data()),
                     const_cast<int*>(extentOnEachRank.data()),
                     const_cast<int*>(displacementForEachRank.data()),
                     MPI_INT,
                     root,
                     communicator);
-        MPI_Bcast(const_cast<GpuTask*>(result.data()), result.size(), MPI_INT, root, communicator);
+        MPI_Bcast(reinterpret_cast<std::underlying_type_t<GpuTask>*>(result.data()),
+                  result.size(),
+                  MPI_INT,
+                  root,
+                  communicator);
 #else
         GMX_UNUSED_VALUE(communicator);
 #endif
@@ -248,7 +253,7 @@ GpuTasksOnRanks findAllGpuTasksOnThisNode(ArrayRef<const GpuTask>         gpuTas
     auto nextDisplacementIt    = currentDisplacementIt + 1;
     do
     {
-        gpuTasksOnRanksOfThisNode.emplace_back(std::vector<GpuTask>());
+        gpuTasksOnRanksOfThisNode.emplace_back();
         for (auto taskOnThisRankIndex = *currentDisplacementIt; taskOnThisRankIndex != *nextDisplacementIt;
              ++taskOnThisRankIndex)
         {

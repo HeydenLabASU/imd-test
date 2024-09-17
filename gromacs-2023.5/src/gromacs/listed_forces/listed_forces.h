@@ -67,6 +67,8 @@
 #ifndef GMX_LISTED_FORCES_LISTED_FORCES_H
 #define GMX_LISTED_FORCES_LISTED_FORCES_H
 
+#include <cstdio>
+
 #include <bitset>
 #include <memory>
 #include <vector>
@@ -75,6 +77,7 @@
 #include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/utility/classhelpers.h"
+#include "gromacs/utility/real.h"
 
 struct bonded_threading_t;
 struct gmx_enerdata_t;
@@ -85,7 +88,6 @@ class history_t;
 struct t_commrec;
 struct t_fcdata;
 struct t_forcerec;
-struct t_lambda;
 struct t_nrnb;
 
 namespace gmx
@@ -163,7 +165,6 @@ public:
      */
     void calculate(struct gmx_wallcycle*                     wcycle,
                    const matrix                              box,
-                   const t_lambda*                           fepvals,
                    const t_commrec*                          cr,
                    const gmx_multisim_t*                     ms,
                    gmx::ArrayRefWithPadding<const gmx::RVec> coordinates,
@@ -200,6 +201,8 @@ public:
 private:
     //! Pointer to the interaction definitions
     InteractionDefinitions const* idef_ = nullptr;
+    //! The number of energy groups
+    int numEnergyGroups_;
     //! Interaction definitions used for storing selections
     InteractionDefinitions idefSelection_;
     //! Thread parallelization setup, unique_ptr to avoid declaring bonded_threading_t

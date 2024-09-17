@@ -42,17 +42,31 @@
 
 #include "gromacs/selection/selectioncollection.h"
 
+#include <cstddef>
+#include <cstdint>
+
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
 #include <gtest/gtest.h>
 
 #include "gromacs/options/basicoptions.h"
 #include "gromacs/options/ioptionscontainer.h"
 #include "gromacs/selection/indexutil.h"
 #include "gromacs/selection/selection.h"
+#include "gromacs/selection/selectionenums.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/trajectory/trajectoryframe.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/flags.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/stringutil.h"
 
 #include "testutils/interactivetest.h"
@@ -63,6 +77,12 @@
 
 #include "toputils.h"
 
+struct gmx_ana_indexgrps_t;
+
+namespace gmx
+{
+namespace test
+{
 namespace
 {
 
@@ -131,7 +151,7 @@ void SelectionCollectionTest::setTopology()
 void SelectionCollectionTest::loadIndexGroups(const char* filename)
 {
     GMX_RELEASE_ASSERT(grps_ == nullptr, "External groups can only be loaded once");
-    std::string fullpath = gmx::test::TestFileManager::getInputFilePath(filename).u8string();
+    std::string fullpath = gmx::test::TestFileManager::getInputFilePath(filename).string();
     gmx_ana_indexgrps_init(&grps_, nullptr, fullpath.c_str());
     sc_.setIndexGroups(grps_);
 }
@@ -266,7 +286,7 @@ void SelectionCollectionDataTest::runParser(const gmx::ArrayRef<const char* cons
     TestReferenceChecker compound(checker_.checkCompound("ParsedSelections", "Parsed"));
     size_t               varcount = 0;
     count_                        = 0;
-    for (gmx::index i = 0; i < selections.ssize(); ++i)
+    for (gmx::Index i = 0; i < selections.ssize(); ++i)
     {
         SCOPED_TRACE(std::string("Parsing selection \"") + selections[i] + "\"");
         gmx::SelectionList result;
@@ -388,11 +408,11 @@ TEST_F(SelectionCollectionTest, HandlesNoSelections)
 TEST_F(SelectionCollectionTest, HandlesNoSelectionsWithDefaultPositionType)
 {
     EXPECT_NO_THROW_GMX(sc_.setOutputPosType("res_com"));
-    EXPECT_TRUE(sc_.requiredTopologyProperties().needsTopology);
-    EXPECT_TRUE(sc_.requiredTopologyProperties().needsMasses);
+    EXPECT_TRUE(sc_.requiredTopologyProperties().needsTopology_);
+    EXPECT_TRUE(sc_.requiredTopologyProperties().needsMasses_);
     EXPECT_NO_THROW_GMX(sc_.setOutputPosType("res_cog"));
-    EXPECT_TRUE(sc_.requiredTopologyProperties().needsTopology);
-    EXPECT_FALSE(sc_.requiredTopologyProperties().needsMasses);
+    EXPECT_TRUE(sc_.requiredTopologyProperties().needsTopology_);
+    EXPECT_FALSE(sc_.requiredTopologyProperties().needsMasses_);
     ASSERT_NO_THROW_GMX(sc_.parseFromString("atom of atomnr 1 to 10"));
     ASSERT_NO_FATAL_FAILURE(loadTopology("simple.gro"));
     ASSERT_NO_THROW_GMX(sc_.compile());
@@ -421,21 +441,21 @@ TEST_F(SelectionCollectionTest, HandlesVelocityAndForceRequests)
 TEST_F(SelectionCollectionTest, HandlesForceRequestForCenterOfGeometry)
 {
     ASSERT_NO_THROW_GMX(sel_ = sc_.parseFromString("res_cog of atomnr 1 to 10"));
-    EXPECT_TRUE(sc_.requiredTopologyProperties().needsTopology);
+    EXPECT_TRUE(sc_.requiredTopologyProperties().needsTopology_);
     ASSERT_NO_FATAL_FAILURE(loadTopology("simple.gro"));
     ASSERT_EQ(1U, sel_.size());
     ASSERT_NO_THROW_GMX(sel_[0].setEvaluateForces(true));
     // In principle, the code could know here that the masses are required, but
     // currently it only knows this after compilation.
     ASSERT_NO_THROW_GMX(sc_.compile());
-    EXPECT_TRUE(sc_.requiredTopologyProperties().needsMasses);
+    EXPECT_TRUE(sc_.requiredTopologyProperties().needsMasses_);
     EXPECT_TRUE(sel_[0].hasForces());
 }
 
 TEST_F(SelectionCollectionTest, ParsesSelectionsFromFile)
 {
-    ASSERT_NO_THROW_GMX(sel_ = sc_.parseFromFile(
-                                gmx::test::TestFileManager::getInputFilePath("selfile.dat").u8string()));
+    ASSERT_NO_THROW_GMX(
+            sel_ = sc_.parseFromFile(gmx::test::TestFileManager::getInputFilePath("selfile.dat")));
     // These should match the contents of selfile.dat
     ASSERT_EQ(2U, sel_.size());
     EXPECT_STREQ("resname RA RB", sel_[0].selectionText());
@@ -846,7 +866,7 @@ TEST_F(SelectionCollectionDataTest, HandlesMass)
 {
     static const char* const selections[] = { "mass > 5" };
     ASSERT_NO_FATAL_FAILURE(runParser(selections));
-    EXPECT_TRUE(sc_.requiredTopologyProperties().needsMasses);
+    EXPECT_TRUE(sc_.requiredTopologyProperties().needsMasses_);
     ASSERT_NO_FATAL_FAILURE(topManager_.loadTopology("simple.gro"));
     t_atoms& atoms = topManager_.atoms();
     for (int i = 0; i < atoms.nr; ++i)
@@ -1555,3 +1575,5 @@ TEST_F(SelectionCollectionDataTest, CopiedSelectionWithIndexPostCompilation)
 }
 
 } // namespace
+} // namespace test
+} // namespace gmx

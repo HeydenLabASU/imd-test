@@ -47,6 +47,9 @@
 #include <cstdlib>
 
 #include <algorithm>
+#include <array>
+#include <filesystem>
+#include <string>
 
 #include "gromacs/gmxlib/nrnb.h"
 #include "gromacs/math/functions.h"
@@ -56,9 +59,13 @@
 #include "gromacs/mdtypes/inputrec.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/pbcutil/pbc.h"
+#include "gromacs/topology/idef.h"
+#include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/invblock.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/listoflists.h"
 
 namespace gmx
@@ -104,7 +111,7 @@ static int pcomp(const void* p1, const void* p2)
 static void pr_sortblock(FILE* fp, const char* title, gmx::ArrayRef<const t_sortblock> sb)
 {
     fprintf(fp, "%s\n", title);
-    for (gmx::index i = 0; i < sb.ssize(); i++)
+    for (gmx::Index i = 0; i < sb.ssize(); i++)
     {
         fprintf(fp,
                 "i: %5td, iatom: (%5d %5d %5d), blocknr: %5d\n",
@@ -393,7 +400,7 @@ static void crattle(const int            iatom[],
             const real constraint_distance_squared_ll = constraint_distance_squared[ll];
 
             /* iconv is zero when the error is smaller than a bound */
-            const real iconvf = fabs(vpijd) * (distance_squared_tolerance[ll] / invdt);
+            const real iconvf = std::fabs(vpijd) * (distance_squared_tolerance[ll] / invdt);
 
             if (iconvf > 1.0_real)
             {

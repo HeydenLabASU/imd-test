@@ -34,14 +34,17 @@
 #ifndef GMX_MDLIB_FORCE_H
 #define GMX_MDLIB_FORCE_H
 
+#include <cstdint>
 #include <cstdio>
 
 #include <memory>
+#include <vector>
 
 #include "gromacs/math/vectypes.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/enumerationhelpers.h"
+#include "gromacs/utility/real.h"
 
 class DDBalanceRegionHandler;
 struct gmx_edsam;
@@ -72,6 +75,7 @@ class Awh;
 class ForceBuffersView;
 class ForceWithVirial;
 class ImdSession;
+struct MDModulesNotifiers;
 class MdrunScheduleWorkload;
 class MDLogger;
 class StepWorkload;
@@ -87,6 +91,9 @@ struct ewald_corr_thread_t
     tensor                                                          vir_lj;
 };
 
+namespace gmx
+{
+
 /* Perform the force and, if requested, energy computation
  *
  * Without multiple time stepping the force is returned in force->force().
@@ -95,40 +102,43 @@ struct ewald_corr_thread_t
  * At fast steps (step % mtsFactor != 0), the fast force is returned in
  * force->force(). The force->forceMtsCombined() buffer is unused.
  * At slow steps, the normal force is returned in force->force(),
- * unless the \p GMX_FORCE_DO_NOT_NEED_NORMAL_FORCE is set in \p legacyFlags.
+ * unless the \p runScheduleWork.stepWork.useOnlyMtsCombinedForceBuffer==true.
  * A MTS-combined force, F_fast + mtsFactor*F_slow, is always returned in
  * force->forceMtsCombined(). This forceMts can be used directly in a standard
  * leap-frog integrator to do multiple time stepping.
  */
-void do_force(FILE*                               log,
-              const t_commrec*                    cr,
-              const gmx_multisim_t*               ms,
-              const t_inputrec&                   inputrec,
-              gmx::Awh*                           awh,
-              gmx_enfrot*                         enforcedRotation,
-              gmx::ImdSession*                    imdSession,
-              pull_t*                             pull_work,
-              int64_t                             step,
-              t_nrnb*                             nrnb,
-              gmx_wallcycle*                      wcycle,
-              const gmx_localtop_t*               top,
-              const matrix                        box,
-              gmx::ArrayRefWithPadding<gmx::RVec> coordinates,
-              const history_t*                    hist,
-              gmx::ForceBuffersView*              force,
-              tensor                              vir_force,
-              const t_mdatoms*                    mdatoms,
-              gmx_enerdata_t*                     enerd,
-              gmx::ArrayRef<const real>           lambda,
-              t_forcerec*                         fr,
-              gmx::MdrunScheduleWorkload*         runScheduleWork,
-              gmx::VirtualSitesHandler*           vsite,
-              rvec                                mu_tot,
-              double                              t,
-              gmx_edsam*                          ed,
-              CpuPpLongRangeNonbondeds*           longRangeNonbondeds,
-              int                                 legacyFlags,
-              const DDBalanceRegionHandler&       ddBalanceRegionHandler);
+void do_force(FILE*                         log,
+              const t_commrec*              cr,
+              const gmx_multisim_t*         ms,
+              const t_inputrec&             inputrec,
+              const MDModulesNotifiers&     mdModulesNotifiers,
+              Awh*                          awh,
+              gmx_enfrot*                   enforcedRotation,
+              ImdSession*                   imdSession,
+              pull_t*                       pull_work,
+              int64_t                       step,
+              t_nrnb*                       nrnb,
+              gmx_wallcycle*                wcycle,
+              const gmx_localtop_t*         top,
+              const matrix                  box,
+              ArrayRefWithPadding<RVec>     coordinates,
+              ArrayRef<RVec>                velocities,
+              const history_t*              hist,
+              ForceBuffersView*             force,
+              tensor                        vir_force,
+              const t_mdatoms*              mdatoms,
+              gmx_enerdata_t*               enerd,
+              ArrayRef<const real>          lambda,
+              t_forcerec*                   fr,
+              const MdrunScheduleWorkload&  runScheduleWork,
+              VirtualSitesHandler*          vsite,
+              rvec                          mu_tot,
+              double                        t,
+              gmx_edsam*                    ed,
+              CpuPpLongRangeNonbondeds*     longRangeNonbondeds,
+              const DDBalanceRegionHandler& ddBalanceRegionHandler);
+
+} // namespace gmx
 
 /* Communicate coordinates (if parallel).
  * Do neighbor searching (if necessary).
@@ -138,8 +148,6 @@ void do_force(FILE*                               log,
  *
  * f is always required.
  */
-
-
 class CpuPpLongRangeNonbondeds
 {
 public:

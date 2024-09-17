@@ -211,15 +211,15 @@ void NoseHooverChainsData::build(NhcUsage                                nhcUsag
         builderHelper->storeSimulationData(
                 NoseHooverChainsData::dataID(nhcUsage),
                 NoseHooverChainsData(
-                        legacySimulatorData->inputrec->opts.ngtc,
-                        legacySimulatorData->inputrec->delta_t * legacySimulatorData->inputrec->nsttcouple,
-                        legacySimulatorData->inputrec->opts.nhchainlength,
-                        constArrayRefFromArray(legacySimulatorData->inputrec->opts.ref_t,
-                                               legacySimulatorData->inputrec->opts.ngtc),
-                        constArrayRefFromArray(legacySimulatorData->inputrec->opts.tau_t,
-                                               legacySimulatorData->inputrec->opts.ngtc),
-                        constArrayRefFromArray(legacySimulatorData->inputrec->opts.nrdf,
-                                               legacySimulatorData->inputrec->opts.ngtc),
+                        legacySimulatorData->inputRec_->opts.ngtc,
+                        legacySimulatorData->inputRec_->delta_t * legacySimulatorData->inputRec_->nsttcouple,
+                        legacySimulatorData->inputRec_->opts.nhchainlength,
+                        constArrayRefFromArray(legacySimulatorData->inputRec_->opts.ref_t,
+                                               legacySimulatorData->inputRec_->opts.ngtc),
+                        constArrayRefFromArray(legacySimulatorData->inputRec_->opts.tau_t,
+                                               legacySimulatorData->inputRec_->opts.ngtc),
+                        constArrayRefFromArray(legacySimulatorData->inputRec_->opts.nrdf,
+                                               legacySimulatorData->inputRec_->opts.ngtc),
                         nhcUsage));
     }
     else
@@ -229,11 +229,11 @@ void NoseHooverChainsData::build(NhcUsage                                nhcUsag
                 NoseHooverChainsData::dataID(nhcUsage),
                 NoseHooverChainsData(
                         numTemperatureGroups,
-                        legacySimulatorData->inputrec->delta_t
-                                * legacySimulatorData->inputrec->pressureCouplingOptions.nstpcouple,
-                        legacySimulatorData->inputrec->opts.nhchainlength,
-                        constArrayRefFromArray(legacySimulatorData->inputrec->opts.ref_t, 1),
-                        constArrayRefFromArray(legacySimulatorData->inputrec->opts.tau_t, 1),
+                        legacySimulatorData->inputRec_->delta_t
+                                * legacySimulatorData->inputRec_->pressureCouplingOptions.nstpcouple,
+                        legacySimulatorData->inputRec_->opts.nhchainlength,
+                        constArrayRefFromArray(legacySimulatorData->inputRec_->opts.ref_t, 1),
+                        constArrayRefFromArray(legacySimulatorData->inputRec_->opts.tau_t, 1),
                         ArrayRef<real>(),
                         nhcUsage));
     }
@@ -254,6 +254,8 @@ void NoseHooverChainsData::build(NhcUsage                                nhcUsag
         return ptrToDataObject->temperatureCouplingIntegral(time);
     });
 }
+
+NoseHooverChainsData::~NoseHooverChainsData() = default;
 
 void NoseHooverGroup::finalizeUpdate(real couplingTimeStep)
 {
@@ -406,8 +408,8 @@ void NoseHooverGroup::doCheckpoint(CheckpointData<operation>* checkpointData)
 //! Broadcast values read from checkpoint over DD ranks
 void NoseHooverGroup::broadcastCheckpointValues(const gmx_domdec_t* dd)
 {
-    dd_bcast(dd, ssize(xi_) * int(sizeof(real)), xi_.data());
-    dd_bcast(dd, ssize(xiVelocities_) * int(sizeof(real)), xiVelocities_.data());
+    dd_bcast(dd, gmx::ssize(xi_) * int(sizeof(real)), xi_.data());
+    dd_bcast(dd, gmx::ssize(xiVelocities_) * int(sizeof(real)), xiVelocities_.data());
     dd_bcast(dd, int(sizeof(real)), &coordinateTime_);
 }
 
@@ -522,7 +524,7 @@ real NoseHooverGroup::applyNhc(real currentKineticEnergy, const real couplingTim
                 // Last thermostat in chain doesn't get scaled.
                 const real localScalingFactor =
                         (chainPosition < chainLength_ - 1)
-                                ? exp(-0.25 * timeStep * xiVelocities_[chainPosition + 1])
+                                ? std::exp(-0.25 * timeStep * xiVelocities_[chainPosition + 1])
                                 : 1.0;
                 xiVelocities_[chainPosition] = localScalingFactor
                                                * (xiVelocities_[chainPosition] * localScalingFactor
@@ -554,7 +556,7 @@ real NoseHooverGroup::applyNhc(real currentKineticEnergy, const real couplingTim
                 // Last thermostat in chain doesn't get scaled.
                 const real localScalingFactor =
                         (chainPosition < chainLength_ - 1)
-                                ? exp(-0.25 * timeStep * xiVelocities_[chainPosition + 1])
+                                ? std::exp(-0.25 * timeStep * xiVelocities_[chainPosition + 1])
                                 : 1.0;
                 xiVelocities_[chainPosition] = localScalingFactor
                                                * (xiVelocities_[chainPosition] * localScalingFactor
@@ -769,13 +771,13 @@ ISimulatorElement* NoseHooverChainsElement::getElementPointerImpl(
 
     // Element is now owned by the caller of this method, who will handle lifetime (see ModularSimulatorAlgorithm)
     auto* element = builderHelper->storeElement(std::make_unique<NoseHooverChainsElement>(
-            legacySimulatorData->inputrec->nsttcouple,
+            legacySimulatorData->inputRec_->nsttcouple,
             offset,
             nhcUsage,
             useFullStepKE,
-            legacySimulatorData->inputrec->delta_t * legacySimulatorData->inputrec->nsttcouple / 2,
+            legacySimulatorData->inputRec_->delta_t * legacySimulatorData->inputRec_->nsttcouple / 2,
             scheduleOnInitStep,
-            legacySimulatorData->inputrec->init_step,
+            legacySimulatorData->inputRec_->init_step,
             energyData,
             nhcData,
             mttkData));

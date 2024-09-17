@@ -47,11 +47,16 @@
 #include "correlationhistory.h"
 
 #include <cassert>
+#include <cstddef>
 
+#include <vector>
+
+#include "gromacs/applied_forces/awh/correlationtensor.h"
 #include "gromacs/gmxlib/network.h"
 #include "gromacs/mdtypes/awh_correlation_history.h"
 #include "gromacs/mdtypes/commrec.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/gmxassert.h"
 
@@ -93,7 +98,7 @@ void updateCorrelationGridHistory(CorrelationGridHistory* correlationGridHistory
     gmx::ArrayRef<CorrelationBlockDataHistory> blockDataBuffer = correlationGridHistory->blockDataBuffer;
 
     /* Store the grid in a linear array */
-    gmx::index bufferIndex = 0;
+    gmx::Index bufferIndex = 0;
     const int tensorSize = correlationGrid.tensors()[0].blockDataList()[0].correlationIntegral().size();
     for (const CorrelationTensor& tensor : correlationGrid.tensors())
     {

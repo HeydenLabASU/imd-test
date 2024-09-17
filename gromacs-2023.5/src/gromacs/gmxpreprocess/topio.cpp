@@ -44,7 +44,13 @@
 #include <cstring>
 
 #include <algorithm>
+#include <array>
+#include <filesystem>
 #include <memory>
+#include <numeric>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_set>
 
 #include <sys/types.h>
@@ -56,6 +62,7 @@
 #include "gromacs/gmxpreprocess/gpp_bond_atomtype.h"
 #include "gromacs/gmxpreprocess/gpp_nextnb.h"
 #include "gromacs/gmxpreprocess/grompp_impl.h"
+#include "gromacs/gmxpreprocess/notset.h"
 #include "gromacs/gmxpreprocess/readir.h"
 #include "gromacs/gmxpreprocess/topdirs.h"
 #include "gromacs/gmxpreprocess/toppush.h"
@@ -67,20 +74,28 @@
 #include "gromacs/mdtypes/inputrec.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/pbcutil/pbc.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/block.h"
 #include "gromacs/topology/exclusionblocks.h"
+#include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/symtab.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/topology/topology_enums.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
 #include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/listoflists.h"
 #include "gromacs/utility/logger.h"
 #include "gromacs/utility/pleasecite.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/stringutil.h"
+
+struct t_nbparam;
 
 #define OPENDIR '['  /* starting sign for directive */
 #define CLOSEDIR ']' /* ending sign for directive   */
@@ -191,6 +206,136 @@ double check_mol(const gmx_mtop_t* mtop, WarningHandler* wi)
         }
     }
     return q;
+}
+
+/*! \brief Describe molecule and involved atoms for a dihedral interaction of a given type
+ *
+ * Searches in the dihedrals of type 3 (Ryckaert-Bellemans or Fourier) for an interaction
+ * type matching the interactionType input parameters, returning for the first match
+ * a string with the name of the  molecule and the 4 involved atoms.
+ *
+ * Precondition: the interaction should exist in the topology
+ *
+ */
+static std::string describeAtomsForRBDihedralOfGivenType(const gmx_mtop_t& mtop, int interactionType)
+{
+    for (const auto& molt : mtop.moltype)
+    {
+        const int* ia = molt.ilist[F_RBDIHS].iatoms.data();
+        for (int i = 0; (i < molt.ilist[F_RBDIHS].size());)
+        {
+            const int type  = ia[0];
+            const int ftype = mtop.ffparams.functype[type];
+            const int nra   = interaction_function[ftype].nratoms;
+            if (type == interactionType)
+            {
+                return gmx::formatString(
+                        "First such dihedral in molecule %s, involving atoms %d %d %d %d",
+                        *(molt.name),
+                        ia[1],
+                        ia[2],
+                        ia[3],
+                        ia[4]);
+            }
+            ia += nra + 1;
+            i += nra + 1;
+        }
+    }
+    gmx_fatal(FARGS, "Precondition violation: could not find RB interaction of given type %d", interactionType);
+}
+
+void checkRBDihedralSum(const gmx_mtop_t& mtop, const t_inputrec& ir, WarningHandler* wi)
+{
+    /*
+     * The sum of the RB dihedral coefficient being zero is relevant when:
+     *     - Free energy computation is being performed (dHdl)
+     *     - Comparing energies between force field ports and/or other MD codes
+     *  because this affect the value of the potential energy.
+     *
+     *  We can clearly detect problems in the first situation: free energy is enabled, stateA
+     *  and stateB have a different sum (=> potential energy "offset" at 0 degree), so we emit a
+     *  warning. The second case is more subtle, since formally the potential is up to a constant,
+     *  which does not affect the dynamics. We therefore only emit a note.
+     */
+
+    // Mistakes here are typically due to using the wrong formula to port dihedrals, not numerical
+    // issues, so we use a relatively large tolerance
+    const real         absoluteTolerance        = 0.01;
+    int                numSumCoefficientNotZero = 0;
+    std::optional<int> indexOfFirstSumCoefficientNotZero;
+    int                numSumCoefficientDifferentInStateAStateB = 0;
+    std::optional<int> indexOfSumCoefficientDifferentInStateAStateB;
+
+    for (int j = 0; j < gmx::ssize(mtop.ffparams.functype); ++j)
+    {
+        int ftype = mtop.ffparams.functype[j];
+        if (ftype == F_RBDIHS)
+        {
+            const t_iparams& params = mtop.ffparams.iparams[j];
+            const real       sum_a =
+                    std::accumulate(std::begin(params.rbdihs.rbcA), std::end(params.rbdihs.rbcA), 0.0);
+            const real sum_b =
+                    std::accumulate(std::begin(params.rbdihs.rbcB), std::end(params.rbdihs.rbcB), 0.0);
+
+            if (std::abs(sum_a - sum_b) > absoluteTolerance)
+            {
+                numSumCoefficientDifferentInStateAStateB++;
+                if (!indexOfSumCoefficientDifferentInStateAStateB.has_value())
+                {
+                    indexOfSumCoefficientDifferentInStateAStateB = j;
+                }
+            }
+
+            if (std::abs(sum_a) > absoluteTolerance || std::abs(sum_b) > absoluteTolerance)
+            {
+                numSumCoefficientNotZero++;
+                if (!indexOfFirstSumCoefficientNotZero.has_value())
+                {
+                    indexOfFirstSumCoefficientNotZero = j;
+                }
+            }
+        }
+    }
+
+    // At this stage of grompp, we only have the interactions that are going to be used in the
+    // simulation - this eliminates warning unrelated to the user's system, but also unfortunately
+    // means that we cannot easily identify the file/line where the offending parameters were
+    // originally defined. We can however go through the molecule types and print one instance of
+    // the offending dihedral.
+
+    auto generateMessage = [](int numDihedrals, const std::string& note, const std::string& involvedAtoms) {
+        return gmx::formatString(
+                "%d dihedrals with function type 3 (Ryckaert-Bellemans or Fourier) have "
+                "coefficients %s"
+                "\n%s",
+                numDihedrals,
+                note.c_str(),
+                involvedAtoms.c_str());
+    };
+
+    if (numSumCoefficientNotZero > 0)
+    {
+        std::string involvedAtoms =
+                describeAtomsForRBDihedralOfGivenType(mtop, indexOfFirstSumCoefficientNotZero.value());
+        std::string note =
+                "that do not sum to zero. This does not affect the simulation and can "
+                "be ignored, unless you are comparing potential energy values with other force "
+                "field ports and/or MD software.";
+        std::string message = generateMessage(numSumCoefficientNotZero, note, involvedAtoms);
+        wi->addNote(message);
+    }
+
+    if (numSumCoefficientDifferentInStateAStateB > 0 && ir.efep != FreeEnergyPerturbationType::No)
+    {
+        std::string involvedAtoms = describeAtomsForRBDihedralOfGivenType(
+                mtop, indexOfSumCoefficientDifferentInStateAStateB.value());
+        std::string note =
+                "whose sums do not match in state A and B. This could introduce an "
+                "undesired offset in dHdl values.";
+        std::string message =
+                generateMessage(numSumCoefficientDifferentInStateAStateB, note, involvedAtoms);
+        wi->addWarning(message);
+    }
 }
 
 /*! \brief Returns the rounded charge of a molecule, when close to integer, otherwise returns the original charge.
@@ -386,26 +531,26 @@ static void make_atoms_sys(gmx::ArrayRef<const gmx_molblock_t>      molblock,
 }
 
 
-static char** read_topol(const char*                           infile,
-                         const char*                           outfile,
-                         const char*                           define,
-                         const char*                           include,
-                         t_symtab*                             symtab,
-                         PreprocessingAtomTypes*               atypes,
-                         std::vector<MoleculeInformation>*     molinfo,
-                         std::unique_ptr<MoleculeInformation>* intermolecular_interactions,
-                         gmx::ArrayRef<InteractionsOfType>     interactions,
-                         CombinationRule*                      combination_rule,
-                         double*                               reppow,
-                         t_gromppopts*                         opts,
-                         real*                                 fudgeQQ,
-                         std::vector<gmx_molblock_t>*          molblock,
-                         bool*                                 ffParametrizedWithHBondConstraints,
-                         bool                                  bFEP,
-                         bool                                  bZero,
-                         bool                                  usingFullRangeElectrostatics,
-                         WarningHandler*                       wi,
-                         const gmx::MDLogger&                  logger)
+static char** read_topol(const char*                                 infile,
+                         const std::optional<std::filesystem::path>& outfile,
+                         const char*                                 define,
+                         const char*                                 include,
+                         t_symtab*                                   symtab,
+                         PreprocessingAtomTypes*                     atypes,
+                         std::vector<MoleculeInformation>*           molinfo,
+                         std::unique_ptr<MoleculeInformation>*       intermolecular_interactions,
+                         gmx::ArrayRef<InteractionsOfType>           interactions,
+                         CombinationRule*                            combination_rule,
+                         double*                                     reppow,
+                         t_gromppopts*                               opts,
+                         real*                                       fudgeQQ,
+                         std::vector<gmx_molblock_t>*                molblock,
+                         bool*                ffParametrizedWithHBondConstraints,
+                         bool                 bFEP,
+                         bool                 bZero,
+                         bool                 usingFullRangeElectrostatics,
+                         WarningHandler*      wi,
+                         const gmx::MDLogger& logger)
 {
     FILE*                out;
     int                  sl;
@@ -438,7 +583,7 @@ static char** read_topol(const char*                           infile,
      */
     if (outfile)
     {
-        out = gmx_fio_fopen(outfile, "w");
+        out = gmx_fio_fopen(outfile.value(), "w");
     }
     else
     {
@@ -464,8 +609,8 @@ static char** read_topol(const char*                           infile,
     *reppow = 12.0; /* Default value for repulsion power     */
 
     /* Init the number of CMAP torsion angles  and grid spacing */
-    interactions[F_CMAP].cmakeGridSpacing = 0;
-    interactions[F_CMAP].cmapAngles       = 0;
+    interactions[F_CMAP].cmapGridSpacing_ = 0;
+    interactions[F_CMAP].numCmaps_        = 0;
 
     bWarn_copy_A_B = bFEP;
 
@@ -703,7 +848,7 @@ static char** read_topol(const char*                           infile,
                             break;
 
                         case Directive::d_cmaptypes:
-                            push_cmaptype(d, interactions, 5, atypes, &bondAtomType, pline, wi);
+                            push_cmaptype(d, interactions, NRAL(F_CMAP), atypes, &bondAtomType, pline, wi);
                             break;
 
                         case Directive::d_moleculetype:
@@ -1011,17 +1156,17 @@ static char** read_topol(const char*                           infile,
         title = put_symtab(symtab, "");
     }
 
-    if (fabs(qt) > 1e-4)
+    if (std::fabs(qt) > 1e-4)
     {
         sprintf(warn_buf, "System has non-zero total charge: %.6f\n%s\n", qt, floating_point_arithmetic_tip);
         wi->addNote(warn_buf);
     }
-    if (fabs(qBt) > 1e-4 && !gmx_within_tol(qBt, qt, 1e-6))
+    if (std::fabs(qBt) > 1e-4 && !gmx_within_tol(qBt, qt, 1e-6))
     {
         sprintf(warn_buf, "State B has non-zero total charge: %.6f\n%s\n", qBt, floating_point_arithmetic_tip);
         wi->addNote(warn_buf);
     }
-    if (usingFullRangeElectrostatics && (fabs(qt) > 1e-4 || fabs(qBt) > 1e-4))
+    if (usingFullRangeElectrostatics && (std::fabs(qt) > 1e-4 || std::fabs(qBt) > 1e-4))
     {
         wi->addWarning(
                 "You are using Ewald electrostatics in a system with net charge. This can lead to "
@@ -1041,44 +1186,33 @@ static char** read_topol(const char*                           infile,
     return title;
 }
 
-char** do_top(bool                                  bVerbose,
-              const char*                           topfile,
-              const char*                           topppfile,
-              t_gromppopts*                         opts,
-              bool                                  bZero,
-              t_symtab*                             symtab,
-              gmx::ArrayRef<InteractionsOfType>     interactions,
-              CombinationRule*                      combination_rule,
-              double*                               repulsion_power,
-              real*                                 fudgeQQ,
-              PreprocessingAtomTypes*               atypes,
-              std::vector<MoleculeInformation>*     molinfo,
-              std::unique_ptr<MoleculeInformation>* intermolecular_interactions,
-              const t_inputrec*                     ir,
-              std::vector<gmx_molblock_t>*          molblock,
-              bool*                                 ffParametrizedWithHBondConstraints,
-              WarningHandler*                       wi,
-              const gmx::MDLogger&                  logger)
+char** do_top(bool                                        bVerbose,
+              const char*                                 topfile,
+              const std::optional<std::filesystem::path>& topppfile,
+              t_gromppopts*                               opts,
+              bool                                        bZero,
+              t_symtab*                                   symtab,
+              gmx::ArrayRef<InteractionsOfType>           interactions,
+              CombinationRule*                            combination_rule,
+              double*                                     repulsion_power,
+              real*                                       fudgeQQ,
+              PreprocessingAtomTypes*                     atypes,
+              std::vector<MoleculeInformation>*           molinfo,
+              std::unique_ptr<MoleculeInformation>*       intermolecular_interactions,
+              const t_inputrec*                           ir,
+              std::vector<gmx_molblock_t>*                molblock,
+              bool*                                       ffParametrizedWithHBondConstraints,
+              WarningHandler*                             wi,
+              const gmx::MDLogger&                        logger)
 {
-    /* Tmpfile might contain a long path */
-    const char* tmpfile;
-    char**      title;
-
-    if (topppfile)
-    {
-        tmpfile = topppfile;
-    }
-    else
-    {
-        tmpfile = nullptr;
-    }
+    char** title;
 
     if (bVerbose)
     {
         GMX_LOG(logger.info).asParagraph().appendTextFormatted("processing topology...");
     }
     title = read_topol(topfile,
-                       tmpfile,
+                       topppfile,
                        opts->define,
                        opts->include,
                        symtab,

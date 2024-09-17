@@ -49,6 +49,8 @@
 #ifndef GMX_AWH_BIASPARAMS_H
 #define GMX_AWH_BIASPARAMS_H
 
+#include <cstdint>
+
 #include <vector>
 
 #include "gromacs/math/vectypes.h"
@@ -210,7 +212,9 @@ private:
     const int64_t numStepsUpdateTarget_; /**< Number of steps per updating the target distribution. */
     const int64_t numStepsCheckCovering_; /**< Number of steps per checking for covering. */
 public:
-    const AwhTargetType eTarget;       /**< Type of target distribution. */
+    const AwhTargetType eTarget;    /**< Type of target distribution. */
+    const bool scaleTargetByMetric; /**< Scale the target distribution based on the friction metric? */
+    const double targetMetricScalingLimit; /**< The upper limit for the scaling factor based on the friction metric. The lower limit is the inverse. */
     const double freeEnergyCutoffInKT; /**< Free energy cut-off in kT for cut-off target distribution. */
     const double temperatureScaleFactor; /**< Temperature scaling factor for temperature scaled targed distributions. */
     const bool   idealWeighthistUpdate; /**< Update reference weighthistogram using the target distribution? Otherwise use the realized distribution. */
@@ -223,7 +227,7 @@ private:
     awh_ivec coverRadius_; /**< The radius (in points) that needs to be sampled around a point before it is considered covered. */
 public:
     const bool convolveForce; /**< True if we convolve the force, false means use MC between umbrellas. */
-    const int biasIndex; /**< Index of the bias, used as a second random seed and for priting. */
+    const int biasIndex_; /**< Index of the bias, used as a second random seed and for priting. */
 private:
     const bool disableUpdateSkips_; /**< If true, we disallow update skips, even when the method supports it. */
 };

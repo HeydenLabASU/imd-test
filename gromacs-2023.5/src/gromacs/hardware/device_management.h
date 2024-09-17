@@ -50,7 +50,11 @@
 #ifndef GMX_HARDWARE_DEVICE_MANAGEMENT_H
 #define GMX_HARDWARE_DEVICE_MANAGEMENT_H
 
+#include <cstddef>
+
+#include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -62,6 +66,7 @@ enum class DeviceVendor : int;
 
 namespace gmx
 {
+enum class GpuAwareMpiStatus : int;
 template<typename>
 class ArrayRef;
 class MDLogger;
@@ -209,6 +214,14 @@ std::vector<int> getCompatibleDeviceIds(gmx::ArrayRef<const std::unique_ptr<Devi
 bool deviceIdIsCompatible(gmx::ArrayRef<const std::unique_ptr<DeviceInformation>> deviceInfoList,
                           int                                                     deviceId);
 
+/*! \brief Return whether all compatible devices in \p deviceInfoList support GPU-aware MPI.
+ *
+ * \return  Whether all compatible devices in the list support GPU-aware MPI
+ *          (both full support and forced support counts).
+ */
+gmx::GpuAwareMpiStatus getMinimalSupportedGpuAwareMpiStatus(
+        gmx::ArrayRef<const std::unique_ptr<DeviceInformation>> deviceInfoList);
+
 /*! \brief Set the active GPU.
  *
  * This sets the device for which the device information is passed active. Essential in CUDA, where
@@ -222,23 +235,19 @@ bool deviceIdIsCompatible(gmx::ArrayRef<const std::unique_ptr<DeviceInformation>
  */
 void setActiveDevice(const DeviceInformation& deviceInfo);
 
-/*! \brief Releases the GPU device used by the active context at the time of calling (CUDA only).
+/*! \brief Releases the GPU device used by the active context at the time of calling.
  *
- * If \c deviceInfo is nullptr, then it is understood that no device
- * was selected so no context is active to be freed. Otherwise, the
- * context is explicitly destroyed and therefore all data uploaded to
+ * With CUDA, the device is reset and therefore all data uploaded to
  * the GPU is lost. This must only be called when none of this data is
  * required anymore, because subsequent attempts to free memory
  * associated with the context will otherwise fail.
- *
  * Calls \c gmx_warning upon errors.
  *
- * \todo This should go through all the devices, not only the one currently active.
- *       Reseting only one device will not work, e.g. in CUDA tests.
+ * With other GPU SDKs, does nothing.
  *
- * \param[in] deviceInfo Information on the device to be released.
+ * Should only be called after \c setActiveDevice was called.
  */
-void releaseDevice(DeviceInformation* deviceInfo);
+void releaseDevice();
 
 /*! \brief Formats and returns a device information string for a given GPU.
  *
@@ -276,5 +285,20 @@ void serializeDeviceInformations(const std::vector<std::unique_ptr<DeviceInforma
  * \return deviceInfoList   Deserialized vector with device informations.
  */
 std::vector<std::unique_ptr<DeviceInformation>> deserializeDeviceInformations(gmx::ISerializer* serializer);
+
+/*! \brief Return an ID for the described GPU that may be unique.
+ *
+ * If a UUID is available, returns its hash.
+ *
+ * Otherwise, returns hash of the \c DeviceInformation::id field.
+ * Note that in this case, the value used on different ranks may or
+ * may not be a reliable indicator of whether the ranks share devices,
+ * depending how that id was constructed, perhaps depending on what
+ * devices were visible to different ranks.
+ */
+size_t uniqueDeviceId(const DeviceInformation& deviceInfo);
+
+//! Return the optional UUID detected for the indicated device
+std::optional<std::array<std::byte, 16>> uuidForDevice(const DeviceInformation& deviceInfo);
 
 #endif // GMX_HARDWARE_DEVICE_MANAGEMENT_H

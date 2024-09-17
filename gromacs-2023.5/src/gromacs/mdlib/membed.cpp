@@ -37,8 +37,16 @@
 
 #include <csignal>
 #include <cstdlib>
+#include <cstring>
+
+#include <algorithm>
+#include <filesystem>
+#include <iterator>
+#include <string>
+#include <vector>
 
 #include "gromacs/commandline/filenm.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/readinp.h"
 #include "gromacs/fileio/warninp.h"
 #include "gromacs/gmxlib/network.h"
@@ -48,16 +56,25 @@
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/state.h"
 #include "gromacs/pbcutil/pbc.h"
+#include "gromacs/topology/atoms.h"
+#include "gromacs/topology/block.h"
+#include "gromacs/topology/idef.h"
+#include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/index.h"
 #include "gromacs/topology/mtop_lookup.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/topology/topology_enums.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
+#include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/filestream.h"
 #include "gromacs/utility/futil.h"
 #include "gromacs/utility/smalloc.h"
+#include "gromacs/utility/stringutil.h"
 
 /* information about scaling center */
 typedef struct
@@ -279,14 +296,14 @@ static int init_ins_at(t_block*          ins_at,
                                     * determine the overlap between molecule to embed and membrane */
     const real fac_inp_size =
             1.000001; /* scaling factor to obtain input_size + 0.000001 (comparing reals) */
-    snew(rest_at->index, state->natoms);
+    snew(rest_at->index, state->numAtoms());
     auto x = makeArrayRef(state->x);
 
     xmin = xmax = x[ins_at->index[0]][XX];
     ymin = ymax = x[ins_at->index[0]][YY];
     zmin = zmax = x[ins_at->index[0]][ZZ];
 
-    for (i = 0; i < state->natoms; i++)
+    for (i = 0; i < state->numAtoms(); i++)
     {
         gid = groups->groupNumbers[SimulationAtomGroupType::Freeze][i];
         if (groups->groups[SimulationAtomGroupType::Freeze][gid] == ins_grp_id)
@@ -722,7 +739,7 @@ static void rm_group(SimulationGroups* groups,
     /* Construct the molecule range information */
     gmx::RangePartitioning molecules = gmx_mtop_molecules(*mtop);
 
-    snew(list, state->natoms);
+    snew(list, state->numAtoms());
     n = 0;
     for (int i = 0; i < rm_p->nr; i++)
     {
@@ -742,7 +759,7 @@ static void rm_group(SimulationGroups* groups,
      * because we still access the coordinate arrays for all positions
      * before removing the molecules we want to remove.
      */
-    const int newStateAtomNumber = state->natoms - n;
+    const int newStateAtomNumber = state->numAtoms() - n;
     snew(x_tmp, newStateAtomNumber);
     snew(v_tmp, newStateAtomNumber);
 
@@ -758,7 +775,7 @@ static void rm_group(SimulationGroups* groups,
     auto x = makeArrayRef(state->x);
     auto v = makeArrayRef(state->v);
     rm     = 0;
-    for (int i = 0; i < state->natoms; i++)
+    for (int i = 0; i < state->numAtoms(); i++)
     {
         bRM = FALSE;
         for (j = 0; j < n; j++)
@@ -801,13 +818,13 @@ static void rm_group(SimulationGroups* groups,
             }
         }
     }
-    state_change_natoms(state, newStateAtomNumber);
-    for (int i = 0; i < state->natoms; i++)
+    state->changeNumAtoms(newStateAtomNumber);
+    for (int i = 0; i < state->numAtoms(); i++)
     {
         copy_rvec(x_tmp[i], x[i]);
     }
     sfree(x_tmp);
-    for (int i = 0; i < state->natoms; i++)
+    for (int i = 0; i < state->numAtoms(); i++)
     {
         copy_rvec(v_tmp[i], v[i]);
     }
@@ -1095,6 +1112,7 @@ gmx_membed_t* init_membed(FILE*          fplog,
         }
         groups = &(mtop->groups);
         std::vector<std::string> gnames;
+        gnames.reserve(groups->groupNames.size());
         for (const auto& groupName : groups->groupNames)
         {
             gnames.emplace_back(*groupName);
@@ -1112,7 +1130,7 @@ gmx_membed_t* init_membed(FILE*          fplog,
         if (found == gnames.end())
         {
             gmx_fatal(FARGS,
-                      "Group %s selected for embedding was not found in the index file.\n"
+                      "Group %s selected for embedding was not found in the list of index groups.\n"
                       "Group names must match either [moleculetype] names or custom index group\n"
                       "names, in which case you must supply an index file to the '-n' option\n"
                       "of grompp.",

@@ -66,6 +66,11 @@ if(GMX_GPU)
            state_propagator_data_gpu_impl_gpu.cpp
            )
    endif()
+   if(GMX_GPU_HIP)
+	  gmx_add_libgromacs_sources(
+		   state_propagator_data_gpu_impl.cpp
+		   )
+	endif()
 else()
     gmx_add_libgromacs_sources(
       state_propagator_data_gpu_impl.cpp
@@ -82,8 +87,7 @@ target_link_libraries(mdtypes PRIVATE
 
 # Public interface for modules, including dependencies and interfaces
 #target_include_directories(mdtypes PUBLIC
-target_include_directories(mdtypes INTERFACE
-                           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+#                           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 #target_link_libraries(mdtypes PUBLIC
 target_link_libraries(mdtypes INTERFACE
                       legacy_api

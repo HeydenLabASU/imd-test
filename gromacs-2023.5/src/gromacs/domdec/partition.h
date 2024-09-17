@@ -44,6 +44,7 @@
 #ifndef GMX_DOMDEC_PARTITION_H
 #define GMX_DOMDEC_PARTITION_H
 
+#include <cstdint>
 #include <cstdio>
 
 #include "gromacs/math/vectypes.h"
@@ -70,6 +71,7 @@ class ForceBuffers;
 class ImdSession;
 class MDAtoms;
 class MDLogger;
+struct MDModulesNotifiers;
 class VirtualSitesHandler;
 
 //! Check whether the DD grid has moved too far for correctness.
@@ -93,6 +95,7 @@ void print_dd_statistics(const t_commrec* cr, const t_inputrec& inputrec, FILE* 
  * \param[in] state_global  Global state
  * \param[in] top_global    Global topology
  * \param[in] inputrec      Input record
+ * \param[in] mdModulesNotifiers  MDModules notifications handler
  * \param[in] imdSession    IMD handle
  * \param[in] pull_work     Pulling data
  * \param[in] state_local   Local state
@@ -114,6 +117,7 @@ void dd_partition_system(FILE*                     fplog,
                          t_state*                  state_global,
                          const gmx_mtop_t&         top_global,
                          const t_inputrec&         inputrec,
+                         const MDModulesNotifiers& mdModulesNotifiers,
                          gmx::ImdSession*          imdSession,
                          pull_t*                   pull_work,
                          t_state*                  state_local,

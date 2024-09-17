@@ -46,9 +46,18 @@
 
 #include "config.h"
 
+#include <cstdint>
+
 #include "gromacs/ewald/pme_pp_comm_gpu.h"
+#include "gromacs/gpu_utils/devicebuffer_datatype.h"
+#include "gromacs/gpu_utils/hostallocator.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/gmxmpi.h"
+
+class DeviceContext;
+class DeviceStream;
+class GpuEventSynchronizer;
 
 #if !GMX_GPU_CUDA && !GMX_GPU_SYCL
 
@@ -65,7 +74,8 @@ PmePpCommGpu::PmePpCommGpu(MPI_Comm /* comm */,
                            int /* pmeRank */,
                            gmx::HostVector<gmx::RVec>* /* pmeCpuForceBuffer */,
                            const DeviceContext& /* deviceContext */,
-                           const DeviceStream& /* deviceStream */) :
+                           const DeviceStream& /* deviceStream */,
+                           const bool /*useNvshmem*/) :
     impl_(nullptr)
 {
     GMX_ASSERT(!impl_,
@@ -127,6 +137,15 @@ GpuEventSynchronizer* PmePpCommGpu::getForcesReadySynchronizer()
                "implementation.");
     return nullptr;
 }
+
+DeviceBuffer<uint64_t> PmePpCommGpu::getGpuForcesSyncObj()
+{
+    GMX_ASSERT(!impl_,
+               "A CPU stub for PME-PP GPU communication was called instead of the correct "
+               "implementation.");
+    return nullptr;
+}
+
 
 } // namespace gmx
 

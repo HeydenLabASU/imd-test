@@ -35,12 +35,22 @@
 
 #include "gromacs/topology/topsort.h"
 
+#include <cstdint>
 #include <cstdio>
 
+#include <array>
+#include <filesystem>
+#include <vector>
+
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdtypes/atominfo.h"
+#include "gromacs/topology/atoms.h"
+#include "gromacs/topology/forcefieldparameters.h"
+#include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/smalloc.h"
 
@@ -149,7 +159,7 @@ static gmx_bool ip_pert(int ftype, const t_iparams* ip)
 
 
 //! Return whether the atom has its charge perturbed per \c atomInfo
-static bool hasPerturbedCharge(int atom, gmx::ArrayRef<const int64_t> atomInfo)
+static bool hasPerturbedCharge(int atom, gmx::ArrayRef<const int32_t> atomInfo)
 {
     return bool(atomInfo[atom] & gmx::sc_atomInfo_HasPerturbedCharge);
 }
@@ -190,7 +200,7 @@ gmx_bool gmx_mtop_bondeds_free_energy(const gmx_mtop_t* mtop)
     return bPert;
 }
 
-void gmx_sort_ilist_fe(InteractionDefinitions* idef, gmx::ArrayRef<const int64_t> atomInfo)
+void gmx_sort_ilist_fe(InteractionDefinitions* idef, gmx::ArrayRef<const int32_t> atomInfo)
 {
     bool havePerturbedInteractions = false;
 

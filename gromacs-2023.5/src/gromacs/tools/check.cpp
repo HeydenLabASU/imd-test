@@ -39,33 +39,51 @@
 #include <cstdio>
 #include <cstring>
 
+#include <array>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/fileio/confio.h"
 #include "gromacs/fileio/enxio.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/gmxfio.h"
+#include "gromacs/fileio/oenv.h"
 #include "gromacs/fileio/tpxio.h"
 #include "gromacs/fileio/trxio.h"
 #include "gromacs/fileio/xtcio.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/math/units.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdrun/mdmodules.h"
 #include "gromacs/mdtypes/inputrec.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/state.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/topology/atomprop.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/block.h"
+#include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/index.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/trajectory/energyframe.h"
 #include "gromacs/trajectory/trajectoryframe.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
+
+struct gmx_output_env_t;
 
 typedef struct
 {
@@ -181,12 +199,12 @@ static void chk_coords(int frame, int natoms, rvec* x, matrix box, real fac, rea
     {
         for (j = 0; (j < DIM); j++)
         {
-            if ((vol > 0) && (fabs(x[i][j]) > fac * box[j][j]))
+            if ((vol > 0) && (std::fabs(x[i][j]) > fac * box[j][j]))
             {
                 printf("Warning at frame %d: coordinates for atom %d are large (%g)\n", frame, i, x[i][j]);
             }
         }
-        if ((fabs(x[i][XX]) < tol) && (fabs(x[i][YY]) < tol) && (fabs(x[i][ZZ]) < tol))
+        if ((std::fabs(x[i][XX]) < tol) && (std::fabs(x[i][YY]) < tol) && (std::fabs(x[i][ZZ]) < tol))
         {
             nNul++;
         }
@@ -205,7 +223,7 @@ static void chk_vels(int frame, int natoms, rvec* v)
     {
         for (j = 0; (j < DIM); j++)
         {
-            if (fabs(v[i][j]) > 500)
+            if (std::fabs(v[i][j]) > 500)
             {
                 printf("Warning at frame %d. Velocities for atom %d are large (%g)\n", frame, i, v[i][j]);
             }
@@ -221,7 +239,7 @@ static void chk_forces(int frame, int natoms, rvec* f)
     {
         for (j = 0; (j < DIM); j++)
         {
-            if (fabs(f[i][j]) > 10000)
+            if (std::fabs(f[i][j]) > 10000)
             {
                 printf("Warning at frame %d. Forces for atom %d are large (%g)\n", frame, i, f[i][j]);
             }
@@ -669,7 +687,7 @@ static void chk_ndx(const char* fn)
         printf("Contents of index file %s\n", fn);
         printf("--------------------------------------------------\n");
         printf("Nr.   Group               #Entries   First    Last\n");
-        for (gmx::index i = 0; i < gmx::ssize(grps); i++)
+        for (gmx::Index i = 0; i < gmx::ssize(grps); i++)
         {
             printf("%4td  %-20s%8td%8d%8d\n",
                    i,
@@ -709,8 +727,8 @@ static void chk_enx(const char* fn)
     {
         if (fnr >= 2)
         {
-            if (fabs((fr->t - old_t1) - (old_t1 - old_t2))
-                > 0.1 * (fabs(fr->t - old_t1) + std::fabs(old_t1 - old_t2)))
+            if (std::fabs((fr->t - old_t1) - (old_t1 - old_t2))
+                > 0.1 * (std::fabs(fr->t - old_t1) + std::fabs(old_t1 - old_t2)))
             {
                 bShowTStep = FALSE;
                 fprintf(stderr, "\nTimesteps at t=%g don't match (%g, %g)\n", old_t1, old_t1 - old_t2, fr->t - old_t1);
@@ -791,7 +809,7 @@ int gmx_check(int argc, char* argv[])
     real              abstol   = 0.001;
     gmx_bool          bCompAB  = FALSE;
     char*             lastener = nullptr;
-    static t_pargs    pa[]     = {
+    t_pargs           pa[]     = {
         { "-vdwfac",
           FALSE,
           etREAL,

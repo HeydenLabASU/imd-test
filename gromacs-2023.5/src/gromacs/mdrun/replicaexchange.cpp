@@ -46,25 +46,37 @@
 
 #include "config.h"
 
+#include <cinttypes>
 #include <cmath>
 
+#include <array>
+#include <filesystem>
+#include <memory>
 #include <random>
+#include <string>
+#include <vector>
 
 #include "gromacs/domdec/collect.h"
 #include "gromacs/gmxlib/network.h"
+#include "gromacs/math/functions.h"
 #include "gromacs/math/units.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdrunutility/multisim.h"
 #include "gromacs/mdtypes/commrec.h"
 #include "gromacs/mdtypes/enerdata.h"
 #include "gromacs/mdtypes/inputrec.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/state.h"
+#include "gromacs/random/seed.h"
 #include "gromacs/random/threefry.h"
 #include "gromacs/random/uniformintdistribution.h"
 #include "gromacs/random/uniformrealdistribution.h"
+#include "gromacs/topology/ifunc.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/pleasecite.h"
 #include "gromacs/utility/smalloc.h"
 
@@ -176,7 +188,7 @@ static gmx_bool repl_quantity(const gmx_multisim_t* ms, struct gmx_repl_ex* re, 
     bDiff = FALSE;
     for (s = 1; s < ms->numSimulations_; s++)
     {
-        if (fabs(qall[s] - qall[0]) > 1e-5) /* Each quantity normally has 2-4 significant digits */
+        if (std::fabs(qall[s] - qall[0]) > 1e-5) /* Each quantity normally has 2-4 significant digits */
         {
             bDiff = TRUE;
         }
@@ -258,8 +270,11 @@ gmx_repl_ex_t init_replica_exchange(FILE*                            fplog,
     check_multi_int(fplog, ms, static_cast<int>(ir->eI), "the integrator", FALSE);
     check_multi_int64(fplog, ms, ir->init_step + ir->nsteps, "init_step+nsteps", FALSE);
     const int nst = replExParams.exchangeInterval;
-    check_multi_int64(
-            fplog, ms, (ir->init_step + nst - 1) / nst, "first exchange step: init_step/-replex", FALSE);
+    check_multi_int64(fplog,
+                      ms,
+                      gmx::divideRoundUp<int64_t>(ir->init_step, nst),
+                      "first exchange step: init_step/-replex",
+                      FALSE);
     check_multi_int(fplog, ms, static_cast<int>(ir->etc), "the temperature coupling", FALSE);
     check_multi_int(fplog, ms, ir->opts.ngtc, "the number of temperature coupling groups", FALSE);
     check_multi_int(
@@ -622,8 +637,8 @@ static void exchange_state(const gmx_multisim_t* ms, int b, t_state* state)
     exchange_doubles(ms, b, state->nhpres_vxi.data(), nnhpres);
     exchange_doubles(ms, b, state->therm_integral.data(), state->ngtc);
     exchange_doubles(ms, b, &state->baros_integral, 1);
-    exchange_rvecs(ms, b, state->x.rvec_array(), state->natoms);
-    exchange_rvecs(ms, b, state->v.rvec_array(), state->natoms);
+    exchange_rvecs(ms, b, state->x.rvec_array(), state->numAtoms());
+    exchange_rvecs(ms, b, state->v.rvec_array(), state->numAtoms());
 }
 
 static void copy_state_serial(const t_state* src, t_state* dest)
@@ -1017,7 +1032,7 @@ static void test_for_replica_exchange(FILE*                 fplog,
                 }
                 else
                 {
-                    prob[0] = exp(-delta);
+                    prob[0] = std::exp(-delta);
                 }
                 // roll a number to determine if accepted. For now it is superfluous to
                 // reset, but just in case we ever add more calls in different branches
@@ -1066,7 +1081,7 @@ static void test_for_replica_exchange(FILE*                 fplog,
                     }
                     else
                     {
-                        prob[i] = exp(-delta);
+                        prob[i] = std::exp(-delta);
                     }
                     // roll a number to determine if accepted. For now it is superfluous to
                     // reset, but just in case we ever add more calls in different branches

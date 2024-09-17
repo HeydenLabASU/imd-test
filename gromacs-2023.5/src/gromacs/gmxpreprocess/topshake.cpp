@@ -39,6 +39,9 @@
 #include <cctype>
 #include <cmath>
 
+#include <filesystem>
+#include <vector>
+
 #include "gromacs/gmxpreprocess/grompp_impl.h"
 #include "gromacs/gmxpreprocess/notset.h"
 #include "gromacs/gmxpreprocess/readir.h"
@@ -47,9 +50,12 @@
 #include "gromacs/gmxpreprocess/toputil.h"
 #include "gromacs/math/units.h"
 #include "gromacs/math/utilities.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/ifunc.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/logger.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 
 static int count_hydrogens(char*** atomname, int nra, gmx::ArrayRef<const int> a)
@@ -111,11 +117,10 @@ void make_shake(gmx::ArrayRef<InteractionsOfType> plist, t_atoms* atoms, int nsh
              */
             for (int ftype = 0; (ftype < F_NRE); ftype++)
             {
-                if (interaction_function[ftype].flags & IF_CHEMBOND)
+                const InteractionsOfType* bonds = &(plist[ftype]);
+                if ((interaction_function[ftype].flags & IF_CHEMBOND) && (bonds->size() > 0))
                 {
-                    InteractionsOfType* bonds = &(plist[ftype]);
-
-                    for (int ftype_a = 0; (gmx::ssize(*bonds) > 0 && ftype_a < F_NRE); ftype_a++)
+                    for (int ftype_a = 0; (ftype_a < F_NRE); ftype_a++)
                     {
                         if (interaction_function[ftype_a].flags & IF_ATYPE)
                         {
@@ -162,7 +167,7 @@ void make_shake(gmx::ArrayRef<InteractionsOfType> plist, t_atoms* atoms, int nsh
                                     {
                                         real param = std::sqrt(
                                                 b_ij * b_ij + b_jk * b_jk
-                                                - 2.0 * b_ij * b_jk * cos(gmx::c_deg2Rad * ang->c0()));
+                                                - 2.0 * b_ij * b_jk * std::cos(gmx::c_deg2Rad * ang->c0()));
                                         std::vector<real> forceParm = { param, param };
                                         if (ftype == F_CONNBONDS || ftype_a == F_CONNBONDS)
                                         {

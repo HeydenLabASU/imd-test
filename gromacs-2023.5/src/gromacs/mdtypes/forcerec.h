@@ -51,9 +51,7 @@
 
 /* Abstract type for PME that is defined only in the routine that use them. */
 struct gmx_pme_t;
-struct nonbonded_verlet_t;
 struct bonded_threading_t;
-class DeviceContext;
 class DispersionCorrection;
 class ListedForces;
 class CpuPpLongRangeNonbondeds;
@@ -63,6 +61,7 @@ struct interaction_const_t;
 
 namespace gmx
 {
+struct nonbonded_verlet_t;
 class DeviceStreamManager;
 class ListedForcesGpu;
 class GpuForceReduction;
@@ -148,6 +147,9 @@ struct t_forcerec
     gmx::RVec       posres_com  = { 0, 0, 0 };
     gmx::RVec       posres_comB = { 0, 0, 0 };
 
+    // Tells whether the box is continuosly deformed
+    bool haveBoxDeformation = false;
+
     bool use_simd_kernels = false;
 
     /* Interaction for calculated in kernels. In many cases this is similar to
@@ -188,14 +190,14 @@ struct t_forcerec
     /* Information about atom properties for the molecule blocks in the global topology */
     std::vector<gmx::AtomInfoWithinMoleculeBlock> atomInfoForEachMoleculeBlock;
     /* Information about atom properties for local and non-local atoms */
-    std::vector<int64_t> atomInfo;
+    std::vector<int32_t> atomInfo;
 
     std::vector<gmx::RVec> shift_vec;
 
     std::unique_ptr<gmx::WholeMoleculeTransform> wholeMoleculeTransform;
 
     /* The Nbnxm Verlet non-bonded machinery */
-    std::unique_ptr<nonbonded_verlet_t> nbv;
+    std::unique_ptr<gmx::nonbonded_verlet_t> nbv;
 
     /* The wall tables (if used) */
     int                                                     nwall = 0;
@@ -265,9 +267,6 @@ struct t_forcerec
     gmx::StatePropagatorDataGpu* stateGpu = nullptr;
     // TODO: Should not be here. This is here only to pass the pointer around.
     gmx::DeviceStreamManager* deviceStreamManager = nullptr;
-
-    //! GPU device context
-    DeviceContext* deviceContext = nullptr;
 
     /* For PME-PP GPU communication */
     std::unique_ptr<gmx::PmePpCommGpu> pmePpCommGpu;

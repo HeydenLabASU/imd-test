@@ -34,22 +34,35 @@
 #include "gmxpre.h"
 
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
+#include <filesystem>
+#include <string>
+
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/trxio.h"
 #include "gromacs/fileio/xvgr.h"
 #include "gromacs/gmxana/gmx_ana.h"
 #include "gromacs/math/do_fit.h"
 #include "gromacs/math/units.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/pbcutil/rmpbc.h"
 #include "gromacs/topology/index.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
+
+enum class PbcType : int;
+struct gmx_output_env_t;
 
 int gmx_helixorient(int argc, char* argv[])
 {
@@ -134,7 +147,7 @@ int gmx_helixorient(int argc, char* argv[])
     static gmx_bool bSC          = FALSE;
     static gmx_bool bIncremental = FALSE;
 
-    static t_pargs pa[] = {
+    t_pargs pa[] = {
         { "-sidechain",
           FALSE,
           etBOOL,
@@ -264,7 +277,7 @@ int gmx_helixorient(int argc, char* argv[])
         /* initialisation for correct distance calculations */
         set_pbc(&pbc, pbcType, box);
         /* make molecules whole again */
-        gmx_rmpbc(gpbc, natoms, box, x);
+        gmx_rmpbc_apply(gpbc, natoms, box, x);
 
         /* copy coords to our smaller arrays */
         for (i = 0; i < iCA; i++)

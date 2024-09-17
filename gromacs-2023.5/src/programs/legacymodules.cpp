@@ -42,6 +42,8 @@
 
 #include <cstdio>
 
+#include <utility>
+
 #include "mdrun/mdrun_main.h"
 #include "mdrun/nonbonded_bench.h"
 
@@ -69,6 +71,11 @@
 #include "gromacs/tools/trjcat.h"
 #include "gromacs/tools/trjconv.h"
 #include "gromacs/tools/tune_pme.h"
+
+namespace gmx
+{
+class CommandLineHelpContext;
+} // namespace gmx
 
 namespace
 {
@@ -285,9 +292,9 @@ void registerLegacyModules(gmx::CommandLineModuleManager* manager)
                    &gmx_filter,
                    "filter",
                    "Frequency filter trajectories, useful for making smooth movies");
-    registerModule(manager, &gmx_gyrate, "gyrate", "Calculate the radius of gyration");
+    registerModule(manager, &gmx_gyrate, "gyrate-legacy", "Calculate the radius of gyration");
     registerModule(manager, &gmx_h2order, "h2order", "Compute the orientation of water molecules");
-    registerModule(manager, &gmx_hbond, "hbond", "Compute and analyze hydrogen bonds");
+    registerModule(manager, &gmx_hbond, "hbond-legacy", "Compute and analyze hydrogen bonds");
     registerModule(manager, &gmx_helix, "helix", "Calculate basic properties of alpha helices");
     registerModule(manager,
                    &gmx_helixorient,
@@ -348,8 +355,10 @@ void registerLegacyModules(gmx::CommandLineModuleManager* manager)
                    "rotmat",
                    "Plot the rotation matrix for fitting to a reference structure");
     registerModule(manager, &gmx_saltbr, "saltbr", "Compute salt bridges");
-    registerModule(manager, &gmx_sans, "sans", "Compute small angle neutron scattering spectra");
-    registerModule(manager, &gmx_saxs, "saxs", "Compute small angle X-ray scattering spectra");
+    registerModule(
+            manager, &gmx_sans, "sans-legacy", "Compute small angle neutron scattering spectra");
+    registerModule(
+            manager, &gmx_saxs, "saxs-legacy", "Compute small angle X-ray scattering spectra");
     registerModule(
             manager, &gmx_sham, "sham", "Compute free energies or other histograms from histograms");
     registerModule(manager,
@@ -458,13 +467,13 @@ void registerLegacyModules(gmx::CommandLineModuleManager* manager)
     {
         gmx::CommandLineModuleGroup group =
                 manager->addModuleGroup("Mass distribution properties over time");
-        group.addModule("gyrate");
+        group.addModule("gyrate-legacy");
         group.addModule("polystat");
         group.addModule("rdf");
         group.addModule("rotacf");
         group.addModule("rotmat");
-        group.addModule("sans");
-        group.addModule("saxs");
+        group.addModule("sans-legacy");
+        group.addModule("saxs-legacy");
         group.addModule("traj");
         group.addModule("vanhove");
     }
@@ -479,7 +488,7 @@ void registerLegacyModules(gmx::CommandLineModuleManager* manager)
         group.addModule("bundle");
         group.addModule("clustsize");
         group.addModule("disre");
-        group.addModule("hbond");
+        group.addModule("hbond-legacy");
         group.addModule("order");
         group.addModule("principal");
         group.addModule("rdf");

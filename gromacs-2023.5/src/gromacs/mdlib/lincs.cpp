@@ -45,16 +45,27 @@
 #include "config.h"
 
 #include <cassert>
+#include <cinttypes>
+#include <climits>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 
 #include <algorithm>
+#include <array>
+#include <filesystem>
+#include <functional>
+#include <memory>
 #include <optional>
+#include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "gromacs/domdec/domdec.h"
 #include "gromacs/domdec/domdec_struct.h"
 #include "gromacs/gmxlib/nrnb.h"
+#include "gromacs/math/arrayrefwithpadding.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/math/paddedvector.h"
 #include "gromacs/math/units.h"
@@ -72,6 +83,8 @@
 #include "gromacs/simd/simd_math.h"
 #include "gromacs/simd/vector_operations.h"
 #include "gromacs/timing/wallcycle.h"
+#include "gromacs/topology/idef.h"
+#include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/utility/alignedallocator.h"
@@ -84,6 +97,7 @@
 #include "gromacs/utility/gmxomp.h"
 #include "gromacs/utility/listoflists.h"
 #include "gromacs/utility/pleasecite.h"
+#include "gromacs/utility/stringutil.h"
 
 namespace
 {
@@ -1360,14 +1374,14 @@ static void set_lincs_matrix_task(Lincs*               li,
                             li_task->tri_bits[li_task->ntriangle] = 0;
                             li_task->ntriangle++;
                             if (li->blnr[i + 1] - li->blnr[i]
-                                > static_cast<int>(sizeof(li_task->tri_bits[0]) * 8 - 1))
+                                > static_cast<int>(sizeof(li_task->tri_bits[0]) * CHAR_BIT - 1))
                             {
                                 gmx_fatal(FARGS,
                                           "A constraint is connected to %d constraints, this is "
                                           "more than the %zu allowed for constraints participating "
                                           "in triangles",
                                           li->blnr[i + 1] - li->blnr[i],
-                                          sizeof(li_task->tri_bits[0]) * 8 - 1);
+                                          sizeof(li_task->tri_bits[0]) * CHAR_BIT - 1);
                             }
                         }
                         li_task->tri_bits[li_task->ntriangle - 1] |= (1 << (n - li->blnr[i]));
@@ -2123,7 +2137,7 @@ void set_lincs(const InteractionDefinitions& idef,
     /* Set the target constraint count per task to exactly uniform,
      * this might be overridden below.
      */
-    int ncon_target = (ncon_assign + li->ntask - 1) / li->ntask;
+    int ncon_target = gmx::divideRoundUp(ncon_assign, li->ntask);
 
     /* Mark all constraints as unassigned by setting their index to -1 */
     for (int con = 0; con < ncon_tot; con++)
@@ -2211,7 +2225,7 @@ void set_lincs(const InteractionDefinitions& idef,
              */
             int i, last;
 
-            li->nc = ((li_task->b1 + simd_width - 1) / simd_width) * simd_width;
+            li->nc = gmx::divideRoundUp(li_task->b1, simd_width) * simd_width;
             last   = li_task->b1 - 1;
             for (i = li_task->b1; i < li->nc; i++)
             {

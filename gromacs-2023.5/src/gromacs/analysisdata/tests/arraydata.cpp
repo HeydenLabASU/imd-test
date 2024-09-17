@@ -47,6 +47,8 @@
 
 #include "gromacs/analysisdata/arraydata.h"
 
+#include <string>
+
 #include <gtest/gtest.h>
 
 #include "gromacs/analysisdata/tests/datatest.h"
@@ -55,6 +57,10 @@
 
 using gmx::test::AnalysisDataTestInput;
 
+namespace gmx
+{
+namespace test
+{
 namespace
 {
 
@@ -71,13 +77,8 @@ class SimpleInputData
 public:
     static const AnalysisDataTestInput& get()
     {
-#ifndef STATIC_ANON_NAMESPACE_BUG
         static SimpleInputData singleton;
         return singleton.data_;
-#else
-        static SimpleInputData singleton_arraydata;
-        return singleton_arraydata.data_;
-#endif
     }
 
     SimpleInputData() : data_(1, false)
@@ -155,3 +156,5 @@ TEST_F(AnalysisArrayDataTest, CanSetXAxisBeforeRowCount)
 }
 
 } // namespace
+} // namespace test
+} // namespace gmx

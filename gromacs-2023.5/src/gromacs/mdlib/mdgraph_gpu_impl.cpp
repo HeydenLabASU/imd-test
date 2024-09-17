@@ -51,10 +51,16 @@
 
 #include "gromacs/gpu_utils/device_stream_manager.h"
 #include "gromacs/mdlib/mdgraph_gpu.h"
+#include "gromacs/mdtypes/simulation_workload.h"
 #include "gromacs/utility/classhelpers.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/gmxmpi.h"
 
-#if !GMX_GPU_CUDA
+class GpuEventSynchronizer;
+enum class MdGraphEvenOrOddStep : int;
+struct gmx_wallcycle;
+
+#if !GMX_HAVE_GPU_GRAPH_SUPPORT
 
 namespace gmx
 {
@@ -142,4 +148,4 @@ GpuEventSynchronizer* MdGpuGraph::getPpTaskCompletionEvent()
 
 } // namespace gmx
 
-#endif // !GMX_GPU_CUDA
+#endif // !GMX_HAVE_GPU_GRAPH_SUPPORT

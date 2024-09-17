@@ -53,7 +53,7 @@
 #include "pme_pp_comm_gpu_impl.h"
 #if GMX_GPU_CUDA
 #    include "gromacs/gpu_utils/cudautils.cuh"
-#    include "gromacs/gpu_utils/typecasts.cuh"
+#    include "gromacs/gpu_utils/typecasts_cuda_hip.h"
 #endif
 #if GMX_GPU_SYCL
 #    include "gromacs/gpu_utils/gmxsycl.h"
@@ -67,23 +67,53 @@ PmePpCommGpu::Impl::Impl(MPI_Comm                    comm,
                          int                         pmeRank,
                          gmx::HostVector<gmx::RVec>* pmeCpuForceBuffer,
                          const DeviceContext&        deviceContext,
-                         const DeviceStream&         deviceStream) :
+                         const DeviceStream&         deviceStream,
+                         bool                        useNvshmem) :
     deviceContext_(deviceContext),
     pmePpCommStream_(deviceStream),
     comm_(comm),
     pmeRank_(pmeRank),
     pmeCpuForceBuffer_(pmeCpuForceBuffer),
-    d_pmeForces_(nullptr)
+    d_pmeForces_(nullptr),
+    forcesReadyNvshmemFlags(nullptr),
+    useNvshmem_(useNvshmem)
 {
     stageLibMpiGpuCpuComm_ = (getenv("GMX_DISABLE_STAGED_GPU_TO_CPU_PMEPP_COMM") == nullptr);
 }
 
-PmePpCommGpu::Impl::~Impl() = default;
+PmePpCommGpu::Impl::~Impl()
+{
+    freeDeviceBuffer(&d_pmeForces_);
+}
 
 void PmePpCommGpu::Impl::reinit(int size)
 {
-    // Reallocate device buffer used for staging PME force
-    reallocateDeviceBuffer(&d_pmeForces_, size, &d_pmeForcesSize_, &d_pmeForcesSizeAlloc_, deviceContext_);
+    int newSize = size;
+    if (useNvshmem_)
+    {
+#if GMX_MPI
+        MPI_Allreduce(&size, &newSize, 1, MPI_INT, MPI_MAX, comm_);
+#endif
+
+        int numPpRanks = 0;
+#if GMX_MPI
+        MPI_Bcast(&numPpRanks, 1, MPI_INT, pmeRank_, comm_);
+#endif
+        // symmetric buffer used for synchronization purpose 1 to be used to signal PME to PP rank
+        // of put, and numPpRanks is intended to be used for each PP rank buffer consumption
+        // completion signal to PME to allow to produce it again. this a collective call.
+        reallocateDeviceBuffer(&forcesReadyNvshmemFlags,
+                               1 + numPpRanks,
+                               &forcesReadyNvshmemFlagsSize_,
+                               &forcesReadyNvshmemFlagsSizeAlloc_,
+                               deviceContext_,
+                               true);
+    }
+
+    // Reallocate device buffer used for staging PME force.
+    // if useNvshmem_ is true, this a collective call, resulting in symmetric allocation involving PME + PP ranks.
+    reallocateDeviceBuffer(
+            &d_pmeForces_, newSize, &d_pmeForcesSize_, &d_pmeForcesSizeAlloc_, deviceContext_, useNvshmem_);
 
     // This rank will access PME rank memory directly, so needs to receive the remote PME buffer addresses.
 #if GMX_THREAD_MPI
@@ -157,8 +187,21 @@ void PmePpCommGpu::Impl::receiveForceFromPmeGpuAwareMpi(Float3* pmeForcePtr, int
     }
     else
     {
-        // Receive data from remote GPU in memory of local GPU
-        MPI_Recv(asMpiPointer(d_pmeForces_), recvSize * DIM, MPI_FLOAT, pmeRank_, 0, comm_, MPI_STATUS_IGNORE);
+        if (useNvshmem_)
+        {
+            // destination is CPU memory, so finalize transfer with local D2H
+            if (pmeForcePtr != asMpiPointer(d_pmeForces_))
+            {
+                // Receive data from remote GPU in memory of local GPU
+                MPI_Recv(asMpiPointer(d_pmeForces_), recvSize * DIM, MPI_FLOAT, pmeRank_, 0, comm_, MPI_STATUS_IGNORE);
+            }
+        }
+        else
+        {
+            // Receive data from remote GPU in memory of local GPU
+            MPI_Recv(asMpiPointer(d_pmeForces_), recvSize * DIM, MPI_FLOAT, pmeRank_, 0, comm_, MPI_STATUS_IGNORE);
+        }
+
         if (pmeForcePtr != asMpiPointer(d_pmeForces_)) // destination is CPU memory, so finalize transfer with local D2H
         {
             copyFromDeviceBuffer(reinterpret_cast<RVec*>(pmeForcePtr),
@@ -194,6 +237,11 @@ void PmePpCommGpu::Impl::sendCoordinatesToPmeGpuAwareMpi(Float3*               s
                                                          int                   sendSize,
                                                          GpuEventSynchronizer* coordinatesReadyOnDeviceEvent)
 {
+    if (sendSize == 0)
+    {
+        return;
+    }
+
     // ensure coordinate data is available on device before we start transfer
     if (coordinatesReadyOnDeviceEvent)
     {
@@ -243,12 +291,18 @@ GpuEventSynchronizer* PmePpCommGpu::Impl::getForcesReadySynchronizer()
     }
 }
 
+DeviceBuffer<uint64_t> PmePpCommGpu::Impl::getGpuForcesSyncObj()
+{
+    return forcesReadyNvshmemFlags;
+}
+
 PmePpCommGpu::PmePpCommGpu(MPI_Comm                    comm,
                            int                         pmeRank,
                            gmx::HostVector<gmx::RVec>* pmeCpuForceBuffer,
                            const DeviceContext&        deviceContext,
-                           const DeviceStream&         deviceStream) :
-    impl_(new Impl(comm, pmeRank, pmeCpuForceBuffer, deviceContext, deviceStream))
+                           const DeviceStream&         deviceStream,
+                           bool                        useNvshmem) :
+    impl_(new Impl(comm, pmeRank, pmeCpuForceBuffer, deviceContext, deviceStream, useNvshmem))
 {
 }
 
@@ -284,6 +338,11 @@ DeviceBuffer<Float3> PmePpCommGpu::getGpuForceStagingPtr()
 GpuEventSynchronizer* PmePpCommGpu::getForcesReadySynchronizer()
 {
     return impl_->getForcesReadySynchronizer();
+}
+
+DeviceBuffer<uint64_t> PmePpCommGpu::getGpuForcesSyncObj()
+{
+    return impl_->getGpuForcesSyncObj();
 }
 
 } // namespace gmx

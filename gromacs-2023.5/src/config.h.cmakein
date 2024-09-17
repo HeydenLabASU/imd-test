@@ -72,10 +72,14 @@
 #cmakedefine01 GMX_GPU_FFT_VKFFT
 /* Use MKL library for FFT on GPUs */
 #cmakedefine01 GMX_GPU_FFT_MKL
+/* Use oneMKL interface library for FFT on GPUs */
+#cmakedefine01 GMX_GPU_FFT_ONEMKL
 /* Use rocFFT library for FFT on GPUs */
 #cmakedefine01 GMX_GPU_FFT_ROCFFT
-/* Use double-batched FFT library for FFT on GPUs */
-#cmakedefine01 GMX_GPU_FFT_DBFFT
+/* Use hipFFT library for FFT on GPUs */
+#cmakedefine01 GMX_GPU_FFT_HIPFFT
+/* Use double-batched FFT library (BBFFT) for FFT on GPUs */
+#cmakedefine01 GMX_GPU_FFT_BBFFT
 
 /* VKFFT Library version */
 #define vkfft_VERSION "@vkfft_VERSION@"
@@ -83,11 +87,14 @@
 /* rocFFT version */
 #define rocfft_VERSION "@rocfft_VERSION@"
 
+/* hipFFT version */
+#define hipfft_VERSION "@hipfft_VERSION@"
+
 /* HeFFTe version */
 #define Heffte_VERSION "@Heffte_VERSION@"
 
 /* Double-Batched FFT Library version (still called bbfft in the implementation) */
-#define dbfft_VERSION "@bbfft-sycl_VERSION@"
+#define bbfft_VERSION "@bbfft-sycl_VERSION@"
 
 /* Target platform is x86 or x86_64 */
 #cmakedefine01 GMX_TARGET_X86
@@ -164,8 +171,20 @@
 /* Compile to use TNG library */
 #cmakedefine01 GMX_USE_TNG
 
+/* Use (and compile) HDF5 related i/o features (H5MD) */
+#cmakedefine01 GMX_USE_HDF5
+
 /* Add support for tracing using Extrae */
 #cmakedefine01 HAVE_EXTRAE
+
+/* Enable NVIDIA NVTX instrumentation */
+#cmakedefine01 GMX_USE_NVTX
+
+/* Enable AMD ROCTX instrumentation */
+#cmakedefine01 GMX_USE_ROCTX
+
+/* Enable Intel ITT instrumentation */
+#cmakedefine01 GMX_USE_ITT
 
 /* Use MPI (with mpicc) for parallelization */
 #cmakedefine01 GMX_LIB_MPI
@@ -176,6 +195,9 @@
 /* Make a parallel version of GROMACS using message passing
    (MPI or thread_mpi) */
 #define GMX_MPI (GMX_LIB_MPI || GMX_THREAD_MPI)
+
+/* Use NVSHMEM for GPU data communication*/
+#cmakedefine01 GMX_NVSHMEM
 
 /* Use OpenMP multithreading */
 #cmakedefine01 GMX_OPENMP
@@ -238,7 +260,7 @@
 #cmakedefine01 GMX_GPU_CUDA
 
 /* Define if CUDA Graphs support is available */
-#cmakedefine01 GMX_HAVE_CUDA_GRAPH_SUPPORT
+#cmakedefine01 GMX_HAVE_GPU_GRAPH_SUPPORT
 
 /* Define if OpenCL GPU acceleration is compiled */
 #cmakedefine01 GMX_GPU_OPENCL
@@ -246,23 +268,29 @@
 /* Define if SYCL GPU acceleration is compiled */
 #cmakedefine01 GMX_GPU_SYCL
 
-/* Define if hipSYCL is used for SYCL support (otherwise DPC++ is assumed) */
-#cmakedefine01 GMX_SYCL_HIPSYCL
+/* Define if AdaptiveCpp (hipSYCL) is used for SYCL support */
+#cmakedefine01 GMX_SYCL_ACPP
 
-// Define if hipSYCL has HIP target(s)
-#cmakedefine01 GMX_HIPSYCL_HAVE_HIP_TARGET
+/* Define if Intel oneAPI DPC++ is used for SYCL support */
+#cmakedefine01 GMX_SYCL_DPCPP
 
-// Define if hipSYCL has CUDA target(s)
-#cmakedefine01 GMX_HIPSYCL_HAVE_CUDA_TARGET
+// Define if AdaptiveCpp has HIP target(s)
+#cmakedefine01 GMX_ACPP_HAVE_HIP_TARGET
 
-// Define if hipSYCL should have AMD RDNA support (32-wide execution)
-#cmakedefine01 GMX_HIPSYCL_ENABLE_AMD_RDNA_SUPPORT
+// Define if AdaptiveCpp has CUDA target(s)
+#cmakedefine01 GMX_ACPP_HAVE_CUDA_TARGET
 
-/* Define if Intel's DPC++ is used (default unless hipSYCL is chosen) */
-#define GMX_SYCL_DPCPP (!GMX_SYCL_HIPSYCL && GMX_GPU_SYCL)
+// Define if AdaptiveCpp should have AMD RDNA support (32-wide execution)
+#cmakedefine01 GMX_ACPP_ENABLE_AMD_RDNA_SUPPORT
 
 /* Use a single compilation unit when compiling the CUDA (non-bonded) kernels.  */
 #cmakedefine01 GMX_CUDA_NB_SINGLE_COMPILATION_UNIT
+
+/* Define if HIP GPU acceleration is compiled */
+#cmakedefine01 GMX_GPU_HIP
+
+/* Define if using HIP unified memory */
+#cmakedefine01 GMX_GPU_HIP_UNIFIED_MEMORY
 
 /* Whether MPI can report its GPU-awareness  */
 #cmakedefine01 HAVE_MPI_EXT
@@ -453,6 +481,9 @@
 
 /* Define if we have muparser support */
 #cmakedefine01 HAVE_MUPARSER
+
+/* Define if we are building with Colvars */
+#cmakedefine01 GMX_HAVE_COLVARS
 
 /* Build using clang analyzer */
 #cmakedefine01 GMX_CLANG_ANALYZER

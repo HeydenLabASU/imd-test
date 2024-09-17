@@ -35,19 +35,27 @@
 
 #include "trjconv.h"
 
+#include <cinttypes>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include <algorithm>
+#include <filesystem>
 #include <memory>
+#include <string>
+#include <utility>
 
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/commandline/viewit.h"
 #include "gromacs/fileio/confio.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/g96io.h"
 #include "gromacs/fileio/gmxfio.h"
 #include "gromacs/fileio/groio.h"
+#include "gromacs/fileio/oenv.h"
 #include "gromacs/fileio/pdbio.h"
 #include "gromacs/fileio/tngio.h"
 #include "gromacs/fileio/tpxio.h"
@@ -58,18 +66,27 @@
 #include "gromacs/math/do_fit.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/pbcutil/pbcmethods.h"
 #include "gromacs/pbcutil/rmpbc.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/index.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/trajectory/trajectoryframe.h"
 #include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
+#include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
+#include "gromacs/utility/stringutil.h"
+
+struct gmx_output_env_t;
 
 static void mk_filenm(char* base, const char* ext, int ndigit, int file_nr, char out_file[])
 {
@@ -565,7 +582,8 @@ int gmx_trjconv(int argc, char* argv[])
           { &bCONECT },
           "Add CONECT PDB records when writing [REF].pdb[ref] files. Useful "
           "for visualization of non-standard molecules, e.g. "
-          "coarse grained ones" }
+          "coarse grained ones. Can only be done when a topology (tpr) file "
+          "is present" }
     };
 #define NPA asize(pa)
 
@@ -779,16 +797,19 @@ int gmx_trjconv(int argc, char* argv[])
 
         if (bTPS)
         {
+            if (bCONECT && (!gmx_fexist(top_file) || !fn2bTPX(top_file)))
+            {
+                gmx_fatal(FARGS, "Option -conect requires a .tpr file for the -s option");
+            }
+            if ((bCluster || bPBCcomMol) && (!gmx_fexist(top_file) || !fn2bTPX(top_file)))
+            {
+                gmx_fatal(FARGS, "Option -pbc %s requires a .tpr file for the -s option", pbc_opt[pbc_enum]);
+            }
             snew(top, 1);
             read_tps_conf(top_file, top, &pbcType, &xp, nullptr, top_box, bReset || bPBCcomRes);
             std::strncpy(top_title, *top->name, 255);
             top_title[255] = '\0';
             atoms          = &top->atoms;
-
-            if (0 == top->mols.nr && (bCluster || bPBCcomMol))
-            {
-                gmx_fatal(FARGS, "Option -pbc %s requires a .tpr file for the -s option", pbc_opt[pbc_enum]);
-            }
 
             /* top_title is only used for gro and pdb,
              * the header in such a file is top_title, followed by
@@ -905,7 +926,7 @@ int gmx_trjconv(int argc, char* argv[])
                store original location (to put structure back) */
             if (bRmPBC)
             {
-                gmx_rmpbc(gpbc, top->atoms.nr, top_box, xp);
+                gmx_rmpbc_apply(gpbc, top->atoms.nr, top_box, xp);
             }
             copy_rvec(xp[index[0]], x_shift);
             reset_x_ndim(nfitdim, ifit, ind_fit, atoms->nr, nullptr, xp, w_rls);

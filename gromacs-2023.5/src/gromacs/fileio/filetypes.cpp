@@ -37,7 +37,11 @@
 
 #include <cstring>
 
+#include <filesystem>
+#include <string>
+
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/path.h"
 
@@ -288,7 +292,7 @@ int fn2ftp(const std::filesystem::path& fn)
     // We need an extra check if the path is ONLY the extension, or if there is no extension
     if (!fn.has_extension())
     {
-        if (!gmx::concatenateBeforeExtension("t", fn.filename().u8string()).has_extension())
+        if (!gmx::concatenateBeforeExtension("t", fn.filename().string()).has_extension())
         {
             return efNR;
         }

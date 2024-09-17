@@ -38,7 +38,15 @@
 #include <climits>
 #include <cmath>
 
+#include <algorithm>
+#include <array>
+#include <functional>
+#include <optional>
+#include <string>
+#include <vector>
+
 #include "gromacs/domdec/ga2la.h"
+#include "gromacs/domdec/localatomset.h"
 #include "gromacs/domdec/localatomsetmanager.h"
 #include "gromacs/gmxlib/network.h"
 #include "gromacs/math/do_fit.h"
@@ -53,14 +61,21 @@
 #include "gromacs/mdtypes/state.h"
 #include "gromacs/pbcutil/ishift.h"
 #include "gromacs/pbcutil/pbc.h"
+#include "gromacs/topology/atoms.h"
+#include "gromacs/topology/forcefieldparameters.h"
+#include "gromacs/topology/idef.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/mtop_atomloops.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/topology/topology_enums.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/exceptions.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/pleasecite.h"
 #include "gromacs/utility/smalloc.h"
+#include "gromacs/utility/stringutil.h"
 
 using gmx::ArrayRef;
 using gmx::RVec;
@@ -77,9 +92,9 @@ void extendStateWithOriresHistory(const gmx_mtop_t& mtop, const t_inputrec& ir, 
     if (numRestraints > 0 && ir.orires_tau > 0)
     {
         /* Extend the state with the orires history */
-        globalState->flags |= enumValueToBitMask(StateEntry::OrireInitF);
+        globalState->addEntry(StateEntry::OrireInitF);
         globalState->hist.orire_initf = 1;
-        globalState->flags |= enumValueToBitMask(StateEntry::OrireDtav);
+        globalState->addEntry(StateEntry::OrireDtav);
         globalState->hist.orire_Dtav.resize(numRestraints * 5);
     }
 }
@@ -88,9 +103,9 @@ namespace
 {
 
 //! Creates and returns a list of global atom indices of the orientation restraint fit group
-std::vector<gmx::index> fitGlobalAtomIndices(const gmx_mtop_t& mtop)
+std::vector<gmx::Index> fitGlobalAtomIndices(const gmx_mtop_t& mtop)
 {
-    std::vector<gmx::index> indices;
+    std::vector<gmx::Index> indices;
 
     for (int i = 0; i < mtop.natoms; i++)
     {
@@ -445,7 +460,7 @@ real calc_orires_dev(const gmx_multisim_t* ms,
 
     clear_rvec(com);
     double     mtot               = 0.0;
-    gmx::index referenceListIndex = 0;
+    gmx::Index referenceListIndex = 0;
     for (const int fitLocalAtomIndex : fitLocalAtomIndices)
     {
         const gmx::RVec& xLocal  = xWholeMolecules[fitLocalAtomIndex];

@@ -46,7 +46,10 @@
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
+#include <iterator>
 #include <numeric>
+#include <string>
 
 #include "gromacs/gmxlib/nrnb.h"
 #include "gromacs/listed_forces/bonded.h"
@@ -54,15 +57,18 @@
 #include "gromacs/listed_forces/orires.h"
 #include "gromacs/listed_forces/pairs.h"
 #include "gromacs/listed_forces/position_restraints.h"
+#include "gromacs/math/arrayrefwithpadding.h"
 #include "gromacs/mdlib/enerdata_utils.h"
 #include "gromacs/mdlib/force.h"
 #include "gromacs/mdtypes/commrec.h"
+#include "gromacs/mdtypes/enerdata.h"
 #include "gromacs/mdtypes/fcdata.h"
 #include "gromacs/mdtypes/forceoutput.h"
 #include "gromacs/mdtypes/forcerec.h"
 #include "gromacs/mdtypes/inputrec.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/simulation_workload.h"
+#include "gromacs/mdtypes/threaded_force_buffer.h"
 #include "gromacs/pbcutil/ishift.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/timing/wallcycle.h"
@@ -71,6 +77,7 @@
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/gmxassert.h"
 
 #include "listed_internal.h"
 #include "manage_threading.h"
@@ -81,6 +88,7 @@ ListedForces::ListedForces(const gmx_ffparams_t&      ffparams,
                            const int                  numThreads,
                            const InteractionSelection interactionSelection,
                            FILE*                      fplog) :
+    numEnergyGroups_(numEnergyGroups),
     idefSelection_(ffparams),
     threading_(std::make_unique<bonded_threading_t>(numThreads, numEnergyGroups, fplog)),
     interactionSelection_(interactionSelection),
@@ -93,9 +101,9 @@ ListedForces::ListedForces(ListedForces&& o) noexcept = default;
 ListedForces::~ListedForces() = default;
 
 //! Copies the selection interactions from \p idefSrc to \p idef
-static void selectInteractions(InteractionDefinitions*                  idef,
-                               const InteractionDefinitions&            idefSrc,
-                               const ListedForces::InteractionSelection interactionSelection)
+static void selectInteractions(InteractionDefinitions*                   idef,
+                               const InteractionDefinitions&             idefSrc,
+                               const ListedForces::InteractionSelection& interactionSelection)
 {
     const bool selectPairs =
             interactionSelection.test(static_cast<int>(ListedForces::InteractionGroup::Pairs));
@@ -248,7 +256,7 @@ real calc_one_bond(int                                 thread,
                    gmx::ArrayRef<const real>           chargeB,
                    gmx::ArrayRef<const bool>           atomIsPerturbed,
                    gmx::ArrayRef<const unsigned short> cENER,
-                   int                                 nPerturbed,
+                   const int                           numEnergyGroups,
                    t_fcdata*                           fcd,
                    const gmx::StepWorkload&            stepWork,
                    int*                                global_atom_index)
@@ -345,7 +353,7 @@ real calc_one_bond(int                                 thread,
                  chargeB,
                  atomIsPerturbed,
                  cENER,
-                 nPerturbed,
+                 numEnergyGroups,
                  fr,
                  havePerturbedInteractions,
                  stepWork,
@@ -379,7 +387,7 @@ static void calcBondedForces(const InteractionDefinitions&       idef,
                              gmx::ArrayRef<const real>           chargeB,
                              gmx::ArrayRef<const bool>           atomIsPerturbed,
                              gmx::ArrayRef<const unsigned short> cENER,
-                             int                                 nPerturbed,
+                             const int                           numEnergyGroups,
                              t_fcdata*                           fcd,
                              const gmx::StepWorkload&            stepWork,
                              int*                                global_atom_index)
@@ -444,7 +452,7 @@ static void calcBondedForces(const InteractionDefinitions&       idef,
                                            chargeB,
                                            atomIsPerturbed,
                                            cENER,
-                                           nPerturbed,
+                                           numEnergyGroups,
                                            fcd,
                                            stepWork,
                                            global_atom_index);
@@ -492,7 +500,7 @@ void calc_listed(struct gmx_wallcycle*               wcycle,
                  gmx::ArrayRef<const real>           chargeB,
                  gmx::ArrayRef<const bool>           atomIsPerturbed,
                  gmx::ArrayRef<const unsigned short> cENER,
-                 int                                 nPerturbed,
+                 const int                           numEnergyGroups,
                  t_fcdata*                           fcd,
                  int*                                global_atom_index,
                  const gmx::StepWorkload&            stepWork)
@@ -519,7 +527,7 @@ void calc_listed(struct gmx_wallcycle*               wcycle,
                          chargeB,
                          atomIsPerturbed,
                          cENER,
-                         nPerturbed,
+                         numEnergyGroups,
                          fcd,
                          stepWork,
                          global_atom_index);
@@ -642,7 +650,6 @@ void calc_listed_lambda(const InteractionDefinitions&       idef,
 
 void ListedForces::calculate(struct gmx_wallcycle*                     wcycle,
                              const matrix                              box,
-                             const t_lambda*                           fepvals,
                              const t_commrec*                          cr,
                              const gmx_multisim_t*                     ms,
                              gmx::ArrayRefWithPadding<const gmx::RVec> coordinates,
@@ -744,7 +751,7 @@ void ListedForces::calculate(struct gmx_wallcycle*                     wcycle,
                 chargeB,
                 atomIsPerturbed,
                 cENER,
-                nPerturbed,
+                numEnergyGroups_,
                 fcdata,
                 global_atom_index,
                 stepWork);
@@ -752,12 +759,12 @@ void ListedForces::calculate(struct gmx_wallcycle*                     wcycle,
     /* Check if we have to determine energy differences
      * at foreign lambda's.
      */
-    if (fepvals->n_lambda > 0 && stepWork.computeDhdl)
+    if (enerd->foreignLambdaTerms.numLambdas() > 0 && stepWork.computeDhdl)
     {
         gmx::EnumerationArray<FreeEnergyPerturbationCouplingType, real> dvdl = { 0 };
         if (!idef.il[F_POSRES].empty())
         {
-            posres_wrapper_lambda(wcycle, fepvals, idef, &pbc_full, x, enerd, lambda, fr);
+            posres_wrapper_lambda(wcycle, idef, &pbc_full, x, enerd, lambda, fr);
         }
         if (idef.ilsort != ilsortNO_FE)
         {
@@ -773,7 +780,8 @@ void ListedForces::calculate(struct gmx_wallcycle*                     wcycle,
                 std::array<real, F_NRE> foreign_term = { 0 };
                 for (auto j : keysOf(lam_i))
                 {
-                    lam_i[j] = (i == 0 ? lambda[static_cast<int>(j)] : fepvals->all_lambda[j][i - 1]);
+                    lam_i[j] = (i == 0 ? lambda[static_cast<int>(j)]
+                                       : enerd->foreignLambdaTerms.foreignLambdas(j)[i - 1]);
                 }
                 calc_listed_lambda(idef,
                                    threading_.get(),

@@ -47,12 +47,22 @@
 
 #include <algorithm>
 #include <array>
+#include <iterator>
+#include <memory>
+#include <vector>
 
 #include "gromacs/math/functions.h"
 #include "gromacs/math/multidimarray.h"
 #include "gromacs/math/units.h"
 #include "gromacs/math/utilities.h"
+#include "gromacs/math/vectypes.h"
+#include "gromacs/mdspan/extensions.h"
+#include "gromacs/mdspan/extents.h"
+#include "gromacs/mdspan/layouts.h"
+#include "gromacs/mdspan/mdspan.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/real.h"
 
 namespace gmx
 {
@@ -114,7 +124,7 @@ GaussianOn1DLattice::Impl::Impl(int numGridPointsForSpreadingHalfWidth, real sig
                      static_cast<int>(std::floor(4 * square(sigma) * c_logMaxFloat)) - 1);
     maxEvaluatedSpreadDistance_ =
             std::min(maxEvaluatedSpreadDistance_,
-                     static_cast<int>(std::floor(sigma * sqrt(-2.0 * c_logMinFloat))) - 1);
+                     static_cast<int>(std::floor(sigma * std::sqrt(-2.0 * c_logMinFloat))) - 1);
 
     std::generate_n(
             std::back_inserter(e3_), maxEvaluatedSpreadDistance_ + 1, [sigma, latticeIndex = 0]() mutable {
@@ -147,10 +157,11 @@ void GaussianOn1DLattice::Impl::spread(double amplitude, real dx)
      * Requiring only two exp evaluations per spreading operation.
      *
      */
-    const double e1 = amplitude * exp(-0.5 * dx * dx / square(sigma_)) / (sqrt(2 * M_PI) * sigma_);
+    const double e1 =
+            amplitude * std::exp(-0.5 * dx * dx / square(sigma_)) / (std::sqrt(2 * M_PI) * sigma_);
     spreadingResult_[numGridPointsForSpreadingHalfWidth_] = e1;
 
-    const double e2 = exp(dx / square(sigma_));
+    const double e2 = std::exp(dx / square(sigma_));
 
     double e2pow = e2; //< powers of e2, e2^offset
 
@@ -253,7 +264,7 @@ mdspan<const float, dynamic_extent, dynamic_extent>
 OuterProductEvaluator::operator()(ArrayRef<const float> x, ArrayRef<const float> y)
 {
     data_.resize(ssize(x), ssize(y));
-    for (gmx::index xIndex = 0; xIndex < ssize(x); ++xIndex)
+    for (gmx::Index xIndex = 0; xIndex < ssize(x); ++xIndex)
     {
         const auto xValue = x[xIndex];
         std::transform(std::begin(y), std::end(y), begin(data_.asView()[xIndex]), [xValue](float yValue) {

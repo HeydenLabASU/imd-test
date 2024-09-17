@@ -48,8 +48,12 @@
 
 #include "gromacs/ewald/pme_force_sender_gpu.h"
 #include "gromacs/gpu_utils/devicebuffer_datatype.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/gmxassert.h"
+
+class DeviceContext;
+class GpuEventSynchronizer;
 
 #if !GMX_GPU_CUDA && !GMX_GPU_SYCL
 
@@ -102,6 +106,14 @@ void PmeForceSenderGpu::sendFToPpGpuAwareMpi(DeviceBuffer<RVec> /* sendbuf */,
                "A CPU stub for PME-PP GPU communication was called instead of the correct "
                "implementation.");
 }
+
+void PmeForceSenderGpu::waitForEvents()
+{
+    GMX_ASSERT(!impl_,
+               "A CPU stub for PME-PP GPU communication was called instead of the correct "
+               "implementation.");
+}
+
 
 } // namespace gmx
 

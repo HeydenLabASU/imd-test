@@ -46,14 +46,19 @@
 
 #include "gromacs/gmxpreprocess/readir.h"
 
+#include "config.h"
+
+#include <filesystem>
 #include <string>
 
 #include <gtest/gtest.h>
 
+#include "gromacs/fileio/readinp.h"
 #include "gromacs/fileio/warninp.h"
 #include "gromacs/mdrun/mdmodules.h"
 #include "gromacs/mdtypes/inputrec.h"
 #include "gromacs/utility/cstringutil.h"
+#include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/stringutil.h"
 #include "gromacs/utility/textreader.h"
 #include "gromacs/utility/textwriter.h"
@@ -106,11 +111,11 @@ public:
                                    || testBehavior == TestBehavior::NoErrorAndCompareOutput;
 
         WarningHandler wi{ false, 0 };
-        std::string    inputMdpFilename = fileManager_.getTemporaryFilePath("input.mdp").u8string();
+        std::string    inputMdpFilename = fileManager_.getTemporaryFilePath("input.mdp").string();
         std::string    outputMdpFilename;
         if (compareOutput)
         {
-            outputMdpFilename = fileManager_.getTemporaryFilePath("output.mdp").u8string();
+            outputMdpFilename = fileManager_.getTemporaryFilePath("output.mdp").string();
         }
         if (setGenVelSeedToKnownValue)
         {

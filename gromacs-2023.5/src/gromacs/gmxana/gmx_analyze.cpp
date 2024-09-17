@@ -34,14 +34,23 @@
 #include "gmxpre.h"
 
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
+#include <filesystem>
+#include <string>
+#include <vector>
+
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/commandline/viewit.h"
 #include "gromacs/correlationfunctions/autocorr.h"
 #include "gromacs/correlationfunctions/expfit.h"
 #include "gromacs/correlationfunctions/integrate.h"
+#include "gromacs/fileio/filetypes.h"
+#include "gromacs/fileio/oenv.h"
 #include "gromacs/fileio/xvgr.h"
 #include "gromacs/gmxana/gmx_ana.h"
 #include "gromacs/gmxana/gstat.h"
@@ -51,11 +60,17 @@
 #include "gromacs/math/utilities.h"
 #include "gromacs/math/vec.h"
 #include "gromacs/statistics/statistics.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
+#include "gromacs/utility/path.h"
 #include "gromacs/utility/pleasecite.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
+
+struct gmx_output_env_t;
 
 /* must correspond to char *avbar_opt[] declared in main() */
 enum
@@ -927,27 +942,16 @@ static void print_fitted_function(const char*       fitfile,
     }
     else
     {
-        char* buf2 = nullptr;
-        int   s, buflen = 0;
-        if (nullptr != fn_fitted)
-        {
-            buflen = std::strlen(fn_fitted) + 32;
-            snew(buf2, buflen);
-            std::strncpy(buf2, fn_fitted, buflen);
-            buf2[std::strlen(buf2) - 4] = '\0';
-        }
+        int s;
         for (s = 0; s < nset; s++)
         {
-            char* buf = nullptr;
-            if (nullptr != fn_fitted)
+            std::filesystem::path buf;
+            if (fn_fitted)
             {
-                snew(buf, buflen);
-                snprintf(buf, n, "%s_%d.xvg", buf2, s);
+                buf = gmx::concatenateBeforeExtension(fn_fitted, gmx::formatString("_%d", s));
             }
-            do_fit(out_fit, s, FALSE, n, t, val, npargs, ppa, oenv, buf);
-            sfree(buf);
+            do_fit(out_fit, s, FALSE, n, t, val, npargs, ppa, oenv, buf.string().c_str());
         }
-        sfree(buf2);
     }
     gmx_ffclose(out_fit);
 }

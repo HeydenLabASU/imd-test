@@ -37,6 +37,10 @@
 
 #include <cmath>
 
+#include <array>
+#include <filesystem>
+#include <string>
+
 #include "gromacs/ewald/ewald_utils.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/math/units.h"
@@ -47,6 +51,7 @@
 #include "gromacs/mdtypes/inputrec.h"
 #include "gromacs/mdtypes/interaction_const.h"
 #include "gromacs/mdtypes/md_enums.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
 
@@ -130,7 +135,7 @@ void ewald_LRcorrection(const int                      numAtomsLocal,
             for (int q = 0; q < (bHaveChargePerturbed ? 2 : 1); q++)
             {
                 /* Avoid charge corrections with near-zero net charge */
-                if (fabs(qsum[q]) > 1e-4)
+                if (std::fabs(qsum[q]) > 1e-4)
                 {
                     chargecorr[q] = 2 * dipole_coeff * qsum[q];
                 }

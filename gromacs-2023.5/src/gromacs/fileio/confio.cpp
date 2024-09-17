@@ -38,6 +38,9 @@
 #include <cstdio>
 #include <cstring>
 
+#include <filesystem>
+#include <string>
+
 #include "gromacs/fileio/espio.h"
 #include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/g96io.h"
@@ -47,12 +50,15 @@
 #include "gromacs/fileio/tpxio.h"
 #include "gromacs/fileio/trxio.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
+#include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/topology/atoms.h"
 #include "gromacs/topology/block.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/symtab.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/trajectory/trajectoryframe.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
@@ -113,7 +119,7 @@ void write_sto_conf_indexed(const std::filesystem::path& outfile,
             gmx_fio_fclose(out);
             break;
         case efTPR:
-            gmx_fatal(FARGS, "Sorry, can not write a topology to %s", outfile.u8string().c_str());
+            gmx_fatal(FARGS, "Sorry, can not write a topology to %s", outfile.string().c_str());
         default: gmx_incons("Not supported in write_sto_conf_indexed");
     }
 }
@@ -165,7 +171,7 @@ void write_sto_conf(const std::filesystem::path& outfile,
             gmx_fio_fclose(out);
             break;
         case efTPR:
-            gmx_fatal(FARGS, "Sorry, can not write a topology to %s", outfile.u8string().c_str());
+            gmx_fatal(FARGS, "Sorry, can not write a topology to %s", outfile.string().c_str());
         default: gmx_incons("Not supported in write_sto_conf");
     }
 }
@@ -352,7 +358,7 @@ static void read_stx_conf(const std::filesystem::path& infile,
 
     if (atoms->nr == 0)
     {
-        fprintf(stderr, "Warning: Number of atoms in %s is 0\n", infile.u8string().c_str());
+        fprintf(stderr, "Warning: Number of atoms in %s is 0\n", infile.string().c_str());
     }
     else if (atoms->atom == nullptr)
     {

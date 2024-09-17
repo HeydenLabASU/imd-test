@@ -43,12 +43,15 @@
 
 #include "config.h"
 
+#include <filesystem>
 #include <string>
 
 #include <gtest/gtest.h>
 
 #include "gromacs/options/filenameoption.h"
 #include "gromacs/utility/stringutil.h"
+
+#include "testutils/testfilemanager.h"
 
 #include "moduletest.h"
 
@@ -76,9 +79,9 @@ public:
         EXPECT_EQ(0, runner_.callGrompp());
 
         runner_.fullPrecisionTrajectoryFileName_ =
-                fileManager_.getTemporaryFilePath("spc-and-methanol.tng").u8string();
+                fileManager_.getTemporaryFilePath("spc-and-methanol.tng").string();
         runner_.reducedPrecisionTrajectoryFileName_ =
-                fileManager_.getTemporaryFilePath("spc-and-methanol-reduced.tng").u8string();
+                fileManager_.getTemporaryFilePath("spc-and-methanol-reduced.tng").string();
         ASSERT_EQ(0, runner_.callMdrun());
         // TODO When there is a way to sense something like the
         // output of gmx check, compare the result with that from

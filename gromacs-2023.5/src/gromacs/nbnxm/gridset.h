@@ -47,6 +47,10 @@
 #ifndef GMX_NBNXM_GRIDSET_H
 #define GMX_NBNXM_GRIDSET_H
 
+#include <cstddef>
+#include <cstdint>
+
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -55,22 +59,20 @@
 #include "gromacs/utility/alignedallocator.h"
 #include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/range.h"
+#include "gromacs/utility/real.h"
 
 #include "grid.h"
 #include "gridsetdata.h"
 
-struct gmx_domdec_zones_t;
-struct nbnxn_atomdata_t;
-enum class PairlistType;
 enum class PbcType : int;
 
 namespace gmx
 {
+class DomdecZones;
+enum class PairlistType;
 class UpdateGroupsCog;
-}
-
-namespace Nbnxm
-{
+enum class PinningPolicy : int;
+struct nbnxn_atomdata_t;
 
 /*! \internal
  * \brief Holds a set of search grids for the local + non-local DD zones
@@ -90,46 +92,46 @@ public:
     struct DomainSetup
     {
         //! Constructor, without DD \p numDDCells and \p ddZones should be nullptr
-        DomainSetup(PbcType                   pbcType,
-                    bool                      doTestParticleInsertion,
-                    const ivec*               numDDCells,
-                    const gmx_domdec_zones_t* ddZones);
+        DomainSetup(PbcType            pbcType,
+                    bool               doTestParticleInsertion,
+                    const IVec*        numDDCells,
+                    const DomdecZones* ddZones);
 
         //! The type of PBC
-        PbcType pbcType;
+        PbcType pbcType_;
         //! Tells whether we are doing test-particle insertion
-        bool doTestParticleInsertion;
+        bool doTestParticleInsertion_;
         //! Are there multiple domains?
         bool haveMultipleDomains;
         //! Are there multiple domains along each dimension?
         std::array<bool, DIM> haveMultipleDomainsPerDim;
         //! The domain decomposition zone setup
-        const gmx_domdec_zones_t* zones;
+        const gmx::DomdecZones* zones;
     };
 
     //! Constructs a grid set for 1 or multiple DD zones, when numDDCells!=nullptr
-    GridSet(PbcType                   pbcType,
-            bool                      doTestParticleInsertion,
-            const ivec*               numDDCells,
-            const gmx_domdec_zones_t* ddZones,
-            PairlistType              pairlistType,
-            bool                      haveFep,
-            int                       numThreads,
-            gmx::PinningPolicy        pinningPolicy);
+    GridSet(PbcType            pbcType,
+            bool               doTestParticleInsertion,
+            const IVec*        numDDCells,
+            const DomdecZones* ddZones,
+            PairlistType       pairlistType,
+            bool               haveFep,
+            int                numThreads,
+            PinningPolicy      pinningPolicy);
 
     //! Puts the atoms on the grid with index \p gridIndex and copies the coordinates to \p nbat
-    void putOnGrid(const matrix                   box,
-                   int                            gridIndex,
-                   const rvec                     lowerCorner,
-                   const rvec                     upperCorner,
-                   const gmx::UpdateGroupsCog*    updateGroupsCog,
-                   gmx::Range<int>                atomRange,
-                   real                           atomDensity,
-                   gmx::ArrayRef<const int64_t>   atomInfo,
-                   gmx::ArrayRef<const gmx::RVec> x,
-                   int                            numAtomsMoved,
-                   const int*                     move,
-                   nbnxn_atomdata_t*              nbat);
+    void putOnGrid(const matrix            box,
+                   int                     gridIndex,
+                   const rvec              lowerCorner,
+                   const rvec              upperCorner,
+                   const UpdateGroupsCog*  updateGroupsCog,
+                   Range<int>              atomRange,
+                   int                     numGridAtoms,
+                   real                    atomDensity,
+                   ArrayRef<const int32_t> atomInfo,
+                   ArrayRef<const RVec>    x,
+                   const int*              move,
+                   nbnxn_atomdata_t*       nbat);
 
     //! Returns the domain setup
     DomainSetup domainSetup() const { return domainSetup_; }
@@ -144,25 +146,28 @@ public:
     int numRealAtomsTotal() const { return numRealAtomsTotal_; }
 
     //! Returns the atom order on the grid for the local atoms
-    gmx::ArrayRef<const int> getLocalAtomorder() const
+    ArrayRef<const int> getLocalAtomorder() const
     {
         /* Return the atom order for the home cell (index 0) */
         const int numIndices = grids_[0].atomIndexEnd() - grids_[0].firstAtomInColumn(0);
 
-        return gmx::constArrayRefFromArray(atomIndices().data(), numIndices);
+        return constArrayRefFromArray(atomIndices().data(), numIndices);
     }
 
     //! Sets the order of the local atoms to the order grid atom ordering
     void setLocalAtomOrder();
 
+    //! Return a single grid
+    const Grid& grid(size_t idx) const { return grids_[idx]; }
+
     //! Returns the list of grids
-    gmx::ArrayRef<const Grid> grids() const { return grids_; }
+    ArrayRef<const Grid> grids() const { return grids_; }
 
     //! Returns the grid atom indices covering all grids
-    gmx::ArrayRef<const int> cells() const { return gridSetData_.cells; }
+    ArrayRef<const int> cells() const { return gridSetData_.cells; }
 
     //! Returns the grid atom indices covering all grids
-    gmx::ArrayRef<const int> atomIndices() const { return gridSetData_.atomIndices; }
+    ArrayRef<const int> atomIndices() const { return gridSetData_.atomIndices; }
 
     //! Returns whether we have perturbed non-bonded interactions
     bool haveFep() const { return haveFep_; }
@@ -198,6 +203,6 @@ private:
     int numColumnsMax_;
 };
 
-} // namespace Nbnxm
+} // namespace gmx
 
 #endif

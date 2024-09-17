@@ -42,25 +42,43 @@
 
 #include "computeglobalselement.h"
 
+#include <any>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
 #include "gromacs/domdec/domdec.h"
 #include "gromacs/gmxlib/network.h"
 #include "gromacs/gmxlib/nrnb.h"
+#include "gromacs/math/arrayrefwithpadding.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdlib/constr.h"
 #include "gromacs/mdlib/md_support.h"
 #include "gromacs/mdlib/mdatoms.h"
 #include "gromacs/mdlib/stat.h"
 #include "gromacs/mdlib/update.h"
 #include "gromacs/mdlib/vcm.h"
+#include "gromacs/mdrun/isimulator.h"
 #include "gromacs/mdtypes/commrec.h"
 #include "gromacs/mdtypes/group.h"
 #include "gromacs/mdtypes/inputrec.h"
+#include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/mdatom.h"
+#include "gromacs/mdtypes/observablesreducer.h"
+#include "gromacs/modularsimulator/energydata.h"
+#include "gromacs/modularsimulator/modularsimulatorinterfaces.h"
+#include "gromacs/modularsimulator/statepropagatordata.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 
 #include "freeenergyperturbationdata.h"
 #include "modularsimulator.h"
 #include "simulatoralgorithm.h"
+
+struct t_forcerec;
 
 namespace gmx
 {
@@ -390,16 +408,16 @@ ISimulatorElement* ComputeGlobalsElement<ComputeGlobalsAlgorithm::LeapFrog>::get
                     freeEnergyPerturbationData,
                     globalCommunicationHelper->simulationSignals(),
                     globalCommunicationHelper->nstglobalcomm(),
-                    legacySimulatorData->fplog,
-                    legacySimulatorData->mdlog,
-                    legacySimulatorData->cr,
-                    legacySimulatorData->inputrec,
-                    legacySimulatorData->mdAtoms,
-                    legacySimulatorData->nrnb,
-                    legacySimulatorData->wcycle,
-                    legacySimulatorData->fr,
-                    legacySimulatorData->top_global,
-                    legacySimulatorData->constr,
+                    legacySimulatorData->fpLog_,
+                    legacySimulatorData->mdLog_,
+                    legacySimulatorData->cr_,
+                    legacySimulatorData->inputRec_,
+                    legacySimulatorData->mdAtoms_,
+                    legacySimulatorData->nrnb_,
+                    legacySimulatorData->wallCycleCounters_,
+                    legacySimulatorData->fr_,
+                    legacySimulatorData->topGlobal_,
+                    legacySimulatorData->constr_,
                     observablesReducer));
     builderHelper->registerPostStepScheduling(
             registerPostStepSchedulingFunction(element->observablesReducer_));
@@ -436,16 +454,16 @@ ISimulatorElement* ComputeGlobalsElement<ComputeGlobalsAlgorithm::VelocityVerlet
                         freeEnergyPerturbationData,
                         globalCommunicationHelper->simulationSignals(),
                         globalCommunicationHelper->nstglobalcomm(),
-                        simulator->fplog,
-                        simulator->mdlog,
-                        simulator->cr,
-                        simulator->inputrec,
-                        simulator->mdAtoms,
-                        simulator->nrnb,
-                        simulator->wcycle,
-                        simulator->fr,
-                        simulator->top_global,
-                        simulator->constr,
+                        simulator->fpLog_,
+                        simulator->mdLog_,
+                        simulator->cr_,
+                        simulator->inputRec_,
+                        simulator->mdAtoms_,
+                        simulator->nrnb_,
+                        simulator->wallCycleCounters_,
+                        simulator->fr_,
+                        simulator->topGlobal_,
+                        simulator->constr_,
                         observablesReducer));
         builderHelper->storeBuilderData(key, vvComputeGlobalsElement);
         builderHelper->registerPostStepScheduling(

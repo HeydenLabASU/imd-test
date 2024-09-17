@@ -42,7 +42,11 @@
 
 #include "gromacs/math/neldermead.h"
 
+#include <cmath>
+
 #include <algorithm>
+#include <functional>
+#include <iterator>
 #include <list>
 #include <numeric>
 #include <vector>
@@ -50,6 +54,7 @@
 #include "gromacs/math/utilities.h"
 #include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 
 namespace gmx
 {
@@ -71,10 +76,11 @@ std::vector<real> linearCombination(real alpha, ArrayRef<const real> a, real bet
     GMX_ASSERT(a.size() == b.size(),
                "Input vectors have to have the same size to evaluate their linear combination.");
     std::vector<real> result(a.size());
-    std::transform(
-            std::begin(a), std::end(a), std::begin(b), std::begin(result), [alpha, beta](auto a, auto b) {
-                return alpha * a + beta * b;
-            });
+    std::transform(std::begin(a),
+                   std::end(a),
+                   std::begin(b),
+                   std::begin(result),
+                   [alpha, beta](auto elemA, auto elemB) { return alpha * elemA + beta * elemB; });
     return result;
 }
 
@@ -225,12 +231,12 @@ real NelderMeadSimplex::orientedLength() const
                 });
         result = std::max(result, thisLength);
     }
-    return sqrt(result);
+    return std::sqrt(result);
 }
 
 void NelderMeadSimplex::updateCentroidAndReflectionPoint()
 {
-    // intialize with first vertex, then add up all other vertex coordinates
+    // initialize with first vertex, then add up all other vertex coordinates
     // expect last one
     centroidWithoutWorstPoint_ =
             std::accumulate(std::next(std::begin(simplex_)),

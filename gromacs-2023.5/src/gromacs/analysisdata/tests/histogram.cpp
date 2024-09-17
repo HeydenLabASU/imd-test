@@ -49,6 +49,9 @@
 
 #include "gromacs/analysisdata/modules/histogram.h"
 
+#include <memory>
+#include <string>
+
 #include <gtest/gtest.h>
 
 #include "gromacs/analysisdata/analysisdata.h"
@@ -58,6 +61,10 @@
 
 using gmx::test::AnalysisDataTestInput;
 
+namespace gmx
+{
+namespace test
+{
 namespace
 {
 
@@ -152,13 +159,8 @@ class SimpleInputData
 public:
     static const AnalysisDataTestInput& get()
     {
-#ifndef STATIC_ANON_NAMESPACE_BUG
         static SimpleInputData singleton;
         return singleton.data_;
-#else
-        static SimpleInputData singleton_histogram;
-        return singleton_histogram.data_;
-#endif
     }
 
     SimpleInputData() : data_(1, true)
@@ -234,13 +236,8 @@ class WeightedSimpleInputData
 public:
     static const AnalysisDataTestInput& get()
     {
-#ifndef STATIC_ANON_NAMESPACE_BUG
         static WeightedSimpleInputData singleton;
         return singleton.data_;
-#else
-        static WeightedSimpleInputData singleton_histogram;
-        return singleton_histogram.data_;
-#endif
     }
 
     WeightedSimpleInputData() : data_(1, true)
@@ -271,13 +268,8 @@ class WeightedDataSetInputData
 public:
     static const AnalysisDataTestInput& get()
     {
-#ifndef STATIC_ANON_NAMESPACE_BUG
         static WeightedDataSetInputData singleton;
         return singleton.data_;
-#else
-        static WeightedDataSetInputData singleton_histogram;
-        return singleton_histogram.data_;
-#endif
     }
 
     WeightedDataSetInputData() : data_(2, true)
@@ -434,13 +426,8 @@ class AverageInputData
 public:
     static const AnalysisDataTestInput& get()
     {
-#ifndef STATIC_ANON_NAMESPACE_BUG
         static AverageInputData singleton;
         return singleton.data_;
-#else
-        static AverageInputData singleton_histogram;
-        return singleton_histogram.data_;
-#endif
     }
 
     AverageInputData() : data_(1, false)
@@ -548,3 +535,5 @@ TEST_F(AbstractAverageHistogramTest, ResamplesAtDoubleBinWidthWithIntegerBins)
 }
 
 } // namespace
+} // namespace test
+} // namespace gmx

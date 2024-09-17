@@ -52,6 +52,7 @@
 #include "gromacs/fft/parallel_3dfft.h"
 #include "gromacs/gpu_utils/cudautils.cuh"
 #include "gromacs/gpu_utils/devicebuffer.cuh"
+#include "gromacs/math/functions.h"
 #include "gromacs/math/vec.h"
 #include "gromacs/timing/wallcycle.h"
 
@@ -91,7 +92,7 @@ static __global__ void pmeGpuPackHaloExternal(const float* __restrict__ gm_realG
     int iy = threadIdx.y + blockIdx.y * blockDim.y;
     int ix = threadIdx.z + blockIdx.z * blockDim.z;
 
-    // we might get iz greather than pmeSize.z when pmeSize.z is not multiple of
+    // we might get iz greater than pmeSize.z when pmeSize.z is not multiple of
     // threadsAlongZDim(see below), same for iy when it's not multiple of threadsAlongYDim
     if (iz >= pmeSize.z || iy >= myGridY)
     {
@@ -201,7 +202,7 @@ static __global__ void pmeGpuUnpackHaloExternal(float* __restrict__ gm_realGrid,
     int iy = threadIdx.y + blockIdx.y * blockDim.y;
     int ix = threadIdx.z + blockIdx.z * blockDim.z;
 
-    // we might get iz greather than pmeSize.z when pmeSize.z is not multiple of
+    // we might get iz greater than pmeSize.z when pmeSize.z is not multiple of
     // threadsAlongZDim(see below), same for iy when it's not multiple of threadsAlongYDim
     if (iz >= pmeSize.z || iy >= myGridY)
     {
@@ -312,7 +313,7 @@ static __global__ void pmeGpuUnpackAndAddHaloInternal(float* __restrict__ gm_rea
     int iy = threadIdx.y + blockIdx.y * blockDim.y;
     int ix = threadIdx.z + blockIdx.z * blockDim.z;
 
-    // we might get iz greather than pmeSize.z when pmeSize.z is not multiple of
+    // we might get iz greater than pmeSize.z when pmeSize.z is not multiple of
     // threadsAlongZDim(see below), same for iy when it's not multiple of threadsAlongYDim
     if (iz >= pmeSize.z || iy >= myGridY)
     {
@@ -413,7 +414,7 @@ static __global__ void pmeGpuPackHaloInternal(const float* __restrict__ gm_realG
     int iy = threadIdx.y + blockIdx.y * blockDim.y;
     int ix = threadIdx.z + blockIdx.z * blockDim.z;
 
-    // we might get iz greather than pmeSize.z when pmeSize.z is not multiple of
+    // we might get iz greater than pmeSize.z when pmeSize.z is not multiple of
     // threadsAlongZDim(see below), same for iy when it's not multiple of threadsAlongYDim
     if (iz >= pmeSize.z || iy >= myGridY)
     {
@@ -554,8 +555,8 @@ static void packHaloDataExternal(const PmeGpu*       pmeGpu,
     config.blockSize[0]     = threadsAlongZDim;
     config.blockSize[1]     = threadsAlongYDim;
     config.blockSize[2]     = 1;
-    config.gridSize[0]      = (pmeSize[ZZ] + threadsAlongZDim - 1) / threadsAlongZDim;
-    config.gridSize[1]      = (myGridY + threadsAlongYDim - 1) / threadsAlongYDim;
+    config.gridSize[0]      = gmx::divideRoundUp(pmeSize[ZZ], threadsAlongZDim);
+    config.gridSize[1]      = gmx::divideRoundUp(myGridY, threadsAlongYDim);
     config.gridSize[2]      = myGridX;
     config.sharedMemorySize = 0;
 
@@ -619,8 +620,8 @@ static void packHaloDataInternal(const PmeGpu*       pmeGpu,
     config.blockSize[0]     = threadsAlongZDim;
     config.blockSize[1]     = threadsAlongYDim;
     config.blockSize[2]     = 1;
-    config.gridSize[0]      = (pmeSize[ZZ] + threadsAlongZDim - 1) / threadsAlongZDim;
-    config.gridSize[1]      = (myGridY + threadsAlongYDim - 1) / threadsAlongYDim;
+    config.gridSize[0]      = gmx::divideRoundUp(pmeSize[ZZ], threadsAlongZDim);
+    config.gridSize[1]      = gmx::divideRoundUp(myGridY, threadsAlongYDim);
     config.gridSize[2]      = myGridX;
     config.sharedMemorySize = 0;
 
@@ -685,8 +686,8 @@ static void unpackAndAddHaloDataInternal(const PmeGpu*       pmeGpu,
     config.blockSize[0]     = threadsAlongZDim;
     config.blockSize[1]     = threadsAlongYDim;
     config.blockSize[2]     = 1;
-    config.gridSize[0]      = (pmeSize[ZZ] + threadsAlongZDim - 1) / threadsAlongZDim;
-    config.gridSize[1]      = (myGridY + threadsAlongYDim - 1) / threadsAlongYDim;
+    config.gridSize[0]      = gmx::divideRoundUp(pmeSize[ZZ], threadsAlongZDim);
+    config.gridSize[1]      = gmx::divideRoundUp(myGridY, threadsAlongYDim);
     config.gridSize[2]      = myGridX;
     config.sharedMemorySize = 0;
 
@@ -752,8 +753,8 @@ static void unpackHaloDataExternal(const PmeGpu*       pmeGpu,
     config.blockSize[0]     = threadsAlongZDim;
     config.blockSize[1]     = threadsAlongYDim;
     config.blockSize[2]     = 1;
-    config.gridSize[0]      = (pmeSize[ZZ] + threadsAlongZDim - 1) / threadsAlongZDim;
-    config.gridSize[1]      = (myGridY + threadsAlongYDim - 1) / threadsAlongYDim;
+    config.gridSize[0]      = gmx::divideRoundUp(pmeSize[ZZ], threadsAlongZDim);
+    config.gridSize[1]      = gmx::divideRoundUp(myGridY, threadsAlongYDim);
     config.gridSize[2]      = myGridX;
     config.sharedMemorySize = 0;
 
@@ -801,9 +802,11 @@ static void receiveAndSend(DeviceBuffer<float> sendBuf,
                            MPI_Comm            comm)
 {
     // send data to dest rank and recv from src rank
+#if GMX_MPI
     MPI_Irecv(recvBuf, recvCount, MPI_FLOAT, src, tag, comm, recvRequest);
 
     MPI_Isend(sendBuf, sendCount, MPI_FLOAT, dest, tag, comm, sendRequest);
+#endif
 }
 
 void pmeGpuGridHaloExchange(const PmeGpu* pmeGpu, gmx_wallcycle* wcycle)
@@ -1365,15 +1368,12 @@ void pmeGpuGridHaloExchangeReverse(const PmeGpu* pmeGpu, gmx_wallcycle* wcycle)
 }
 
 template<bool pmeToFft>
-void convertPmeGridToFftGrid(const PmeGpu*         pmeGpu,
-                             float*                h_fftRealGrid,
-                             gmx_parallel_3dfft_t* fftSetup,
-                             const int             gridIndex)
+void convertPmeGridToFftGrid(const PmeGpu* pmeGpu, float* h_fftRealGrid, gmx_parallel_3dfft* fftSetup, const int gridIndex)
 {
     ivec localFftNData, localFftOffset, localFftSize;
     ivec localPmeSize;
 
-    gmx_parallel_3dfft_real_limits(fftSetup[gridIndex], localFftNData, localFftOffset, localFftSize);
+    gmx_parallel_3dfft_real_limits(fftSetup, localFftNData, localFftOffset, localFftSize);
 
     localPmeSize[XX] = pmeGpu->kernelParams->grid.realGridSizePadded[XX];
     localPmeSize[YY] = pmeGpu->kernelParams->grid.realGridSizePadded[YY];
@@ -1416,8 +1416,8 @@ void convertPmeGridToFftGrid(const PmeGpu*         pmeGpu,
         config.blockSize[0] = threadsAlongZDim;
         config.blockSize[1] = 4;
         config.blockSize[2] = 1;
-        config.gridSize[0]  = (localFftNData[ZZ] + config.blockSize[0] - 1) / config.blockSize[0];
-        config.gridSize[1]  = (localFftNData[YY] + config.blockSize[1] - 1) / config.blockSize[1];
+        config.gridSize[0]  = gmx::divideRoundUp<size_t>(localFftNData[ZZ], config.blockSize[0]);
+        config.gridSize[1]  = gmx::divideRoundUp<size_t>(localFftNData[YY], config.blockSize[1]);
         config.gridSize[2]  = localFftNData[XX];
         config.sharedMemorySize = 0;
 
@@ -1500,8 +1500,8 @@ void convertPmeGridToFftGrid(const PmeGpu* pmeGpu, DeviceBuffer<float>* d_fftRea
         config.blockSize[0] = threadsAlongZDim;
         config.blockSize[1] = 4;
         config.blockSize[2] = 1;
-        config.gridSize[0]  = (localFftNData[ZZ] + config.blockSize[0] - 1) / config.blockSize[0];
-        config.gridSize[1]  = (localFftNData[YY] + config.blockSize[1] - 1) / config.blockSize[1];
+        config.gridSize[0]  = gmx::divideRoundUp<size_t>(localFftNData[ZZ], config.blockSize[0]);
+        config.gridSize[1]  = gmx::divideRoundUp<size_t>(localFftNData[YY], config.blockSize[1]);
         config.gridSize[2]  = localFftNData[XX];
         config.sharedMemorySize = 0;
 
@@ -1525,15 +1525,15 @@ void convertPmeGridToFftGrid(const PmeGpu* pmeGpu, DeviceBuffer<float>* d_fftRea
     }
 }
 
-template void convertPmeGridToFftGrid<true>(const PmeGpu*         pmeGpu,
-                                            float*                h_fftRealGrid,
-                                            gmx_parallel_3dfft_t* fftSetup,
-                                            const int             gridIndex);
+template void convertPmeGridToFftGrid<true>(const PmeGpu*       pmeGpu,
+                                            float*              h_fftRealGrid,
+                                            gmx_parallel_3dfft* fftSetup,
+                                            const int           gridIndex);
 
-template void convertPmeGridToFftGrid<false>(const PmeGpu*         pmeGpu,
-                                             float*                h_fftRealGrid,
-                                             gmx_parallel_3dfft_t* fftSetup,
-                                             const int             gridIndex);
+template void convertPmeGridToFftGrid<false>(const PmeGpu*       pmeGpu,
+                                             float*              h_fftRealGrid,
+                                             gmx_parallel_3dfft* fftSetup,
+                                             const int           gridIndex);
 
 template void convertPmeGridToFftGrid<true>(const PmeGpu*        pmeGpu,
                                             DeviceBuffer<float>* d_fftRealGrid,

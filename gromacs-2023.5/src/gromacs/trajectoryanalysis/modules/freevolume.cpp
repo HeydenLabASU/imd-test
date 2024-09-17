@@ -42,28 +42,40 @@
 
 #include "freevolume.h"
 
+#include <cstdio>
+
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "gromacs/analysisdata/analysisdata.h"
 #include "gromacs/analysisdata/modules/average.h"
 #include "gromacs/analysisdata/modules/plot.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/math/units.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/options/basicoptions.h"
 #include "gromacs/options/filenameoption.h"
 #include "gromacs/options/ioptionscontainer.h"
+#include "gromacs/options/optionfiletype.h"
 #include "gromacs/pbcutil/pbc.h"
+#include "gromacs/random/seed.h"
 #include "gromacs/random/threefry.h"
 #include "gromacs/random/uniformrealdistribution.h"
 #include "gromacs/selection/nbsearch.h"
 #include "gromacs/selection/selection.h"
 #include "gromacs/selection/selectionoption.h"
 #include "gromacs/topology/atomprop.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/trajectory/trajectoryframe.h"
 #include "gromacs/trajectoryanalysis/analysissettings.h"
 #include "gromacs/trajectoryanalysis/topologyinformation.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/pleasecite.h"
+#include "gromacs/utility/real.h"
 
 namespace gmx
 {
@@ -238,10 +250,8 @@ void FreeVolume::initAnalysis(const TrajectoryAnalysisSettings& settings, const 
     // Loop over atoms in the selection using an iterator
     const int           maxnovdw = 10;
     ArrayRef<const int> atomind  = sel_.atomIndices();
-    for (ArrayRef<const int>::iterator ai = atomind.begin(); (ai < atomind.end()); ++ai)
+    for (const auto& i : atomind)
     {
-        // Dereference the iterator to obtain an atom number
-        int  i     = *ai;
         real value = 0;
 
         // Lookup the Van der Waals radius of this atom

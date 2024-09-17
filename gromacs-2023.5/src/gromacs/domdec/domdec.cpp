@@ -47,7 +47,10 @@
 #include <cstring>
 
 #include <algorithm>
+#include <array>
+#include <filesystem>
 #include <memory>
+#include <string>
 
 #include "gromacs/domdec/builder.h"
 #include "gromacs/domdec/collect.h"
@@ -55,8 +58,10 @@
 #include "gromacs/domdec/dlb.h"
 #include "gromacs/domdec/dlbtiming.h"
 #include "gromacs/domdec/domdec_network.h"
+#include "gromacs/domdec/domdec_struct.h"
 #include "gromacs/domdec/ga2la.h"
 #include "gromacs/domdec/gpuhaloexchange.h"
+#include "gromacs/domdec/hashedmap.h"
 #include "gromacs/domdec/localtopologychecker.h"
 #include "gromacs/domdec/options.h"
 #include "gromacs/domdec/partition.h"
@@ -74,6 +79,7 @@
 #include "gromacs/mdlib/constr.h"
 #include "gromacs/mdlib/constraintrange.h"
 #include "gromacs/mdlib/updategroups.h"
+#include "gromacs/mdlib/updategroupscog.h"
 #include "gromacs/mdlib/vcm.h"
 #include "gromacs/mdlib/vsite.h"
 #include "gromacs/mdrun/mdmodules.h"
@@ -82,6 +88,7 @@
 #include "gromacs/mdtypes/forceoutput.h"
 #include "gromacs/mdtypes/forcerec.h"
 #include "gromacs/mdtypes/inputrec.h"
+#include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/mdrunoptions.h"
 #include "gromacs/mdtypes/state.h"
 #include "gromacs/pbcutil/ishift.h"
@@ -95,15 +102,21 @@
 #include "gromacs/topology/mtop_lookup.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/basenetwork.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/fixedcapacityvector.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/gmxmpi.h"
+#include "gromacs/utility/iserializer.h"
 #include "gromacs/utility/logger.h"
+#include "gromacs/utility/range.h"
 #include "gromacs/utility/real.h"
+#include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/strconvert.h"
 #include "gromacs/utility/stringstream.h"
 #include "gromacs/utility/stringutil.h"
@@ -121,6 +134,12 @@
 #include "redistribute.h"
 #include "utility.h"
 
+namespace gmx
+{
+class LocalAtomSetManager;
+class ObservablesReducerBuilder;
+} // namespace gmx
+
 // TODO remove this when moving domdec into gmx namespace
 using gmx::ArrayRef;
 using gmx::DdRankOrder;
@@ -136,22 +155,6 @@ static const char* enumValueToString(DlbState enumValue)
     return dlbStateNames[enumValue];
 }
 
-/* The DD zone order */
-static const ivec dd_zo[DD_MAXZONE] = { { 0, 0, 0 }, { 1, 0, 0 }, { 1, 1, 0 }, { 0, 1, 0 },
-                                        { 0, 1, 1 }, { 0, 0, 1 }, { 1, 0, 1 }, { 1, 1, 1 } };
-
-/* The non-bonded zone-pair setup for domain decomposition
- * The first number is the i-zone, the second number the first j-zone seen by
- * this i-zone, the third number the last+1 j-zone seen by this i-zone.
- * As is, this is for 3D decomposition, where there are 4 i-zones.
- * With 2D decomposition use only the first 2 i-zones and a last+1 j-zone of 4.
- * With 1D decomposition use only the first i-zone and a last+1 j-zone of 2.
- */
-static const int ddNonbondedZonePairRanges[DD_MAXIZONE][3] = { { 0, 0, 8 },
-                                                               { 1, 3, 6 },
-                                                               { 2, 5, 6 },
-                                                               { 3, 5, 7 } };
-
 //! The minimum step interval for DD algorithms requiring global communication
 static constexpr int sc_minimumGCStepInterval = 100;
 
@@ -162,28 +165,30 @@ static void ddindex2xyz(const ivec nc, int ind, ivec xyz)
     xyz[ZZ] = ind % nc[ZZ];
 }
 
-static int ddcoord2ddnodeid(gmx_domdec_t* dd, ivec c)
+//! Returns the MPI rank for the PP domain corresponding to \p coord
+static int ddRankFromDDCoord(const gmx_domdec_t& dd, const gmx::IVec& coord)
 {
-    int ddnodeid = -1;
+    int rank = -1;
 
-    const CartesianRankSetup& cartSetup = dd->comm->cartesianRankSetup;
-    const int                 ddindex   = dd_index(dd->numCells, c);
+    const CartesianRankSetup& cartSetup = dd.comm->cartesianRankSetup;
+    const int                 ddindex   = dd_index(dd.numCells, coord);
     if (cartSetup.bCartesianPP_PME)
     {
-        ddnodeid = cartSetup.ddindex2ddnodeid[ddindex];
+        rank = cartSetup.ddindex2ddnodeid[ddindex];
     }
     else if (cartSetup.bCartesianPP)
     {
 #if GMX_MPI
-        MPI_Cart_rank(dd->mpi_comm_all, c, &ddnodeid);
+        gmx::IVec tmp = coord;
+        MPI_Cart_rank(dd.mpi_comm_all, static_cast<int*>(&tmp[0]), &rank);
 #endif
     }
     else
     {
-        ddnodeid = ddindex;
+        rank = ddindex;
     }
 
-    return ddnodeid;
+    return rank;
 }
 
 int ddglatnr(const gmx_domdec_t* dd, int i)
@@ -219,15 +224,15 @@ void dd_store_state(const gmx_domdec_t& dd, t_state* state)
     state->cg_gl.resize(dd.numHomeAtoms);
     for (int i = 0; i < dd.numHomeAtoms; i++)
     {
-        state->cg_gl[i] = dd.globalAtomGroupIndices[i];
+        state->cg_gl[i] = dd.globalAtomIndices[i];
     }
 
     state->ddp_count_cg_gl = dd.ddp_count;
 }
 
-gmx_domdec_zones_t* domdec_zones(gmx_domdec_t* dd)
+const gmx::DomdecZones& getDomdecZones(const gmx_domdec_t& dd)
 {
-    return &dd->comm->zones;
+    return dd.zones;
 }
 
 int dd_numAtomsZones(const gmx_domdec_t& dd)
@@ -362,7 +367,7 @@ void dd_move_f(gmx_domdec_t* dd, gmx::ForceWithShiftForces* forceWithShiftForces
     gmx::ArrayRef<gmx::RVec> fshift = forceWithShiftForces->shiftForces();
 
     gmx_domdec_comm_t& comm    = *dd->comm;
-    int                nzone   = comm.zones.n / 2;
+    int                nzone   = dd->zones.numZones() / 2;
     int                nat_tot = comm.atomRanges.end(DDAtomRanges::Type::Zones);
     for (int d = dd->ndim - 1; d >= 0; d--)
     {
@@ -370,8 +375,7 @@ void dd_move_f(gmx_domdec_t* dd, gmx::ForceWithShiftForces* forceWithShiftForces
            consider PBC in the treatment of fshift */
         const bool shiftForcesNeedPbc =
                 (forceWithShiftForces->computeVirial() && dd->ci[dd->dim[d]] == 0);
-        const bool applyScrewPbc =
-                (shiftForcesNeedPbc && dd->unitCellInfo.haveScrewPBC && dd->dim[d] == XX);
+        const bool applyScrewPbc = (dd->unitCellInfo.haveScrewPBC && dd->dim[d] == XX);
         /* Determine which shift vector we need */
         ivec vis        = { 0, 0, 0 };
         vis[dd->dim[d]] = 1;
@@ -411,7 +415,7 @@ void dd_move_f(gmx_domdec_t* dd, gmx::ForceWithShiftForces* forceWithShiftForces
             ddSendrecv(dd, d, dddirForward, sendBuffer, receiveBuffer);
             /* Add the received forces */
             int n = 0;
-            if (!shiftForcesNeedPbc)
+            if (!applyScrewPbc && !shiftForcesNeedPbc)
             {
                 for (int j : ind.index)
                 {
@@ -679,7 +683,7 @@ std::vector<int> get_pme_ddranks(const t_commrec* cr, const int pmenodeid)
     GMX_RELEASE_ASSERT(ddRankSetup.usePmeOnlyRanks,
                        "This function should only be called when PME-only ranks are in use");
     std::vector<int> ddranks;
-    ddranks.reserve((ddRankSetup.numPPRanks + ddRankSetup.numRanksDoingPme - 1) / ddRankSetup.numRanksDoingPme);
+    ddranks.reserve(gmx::divideRoundUp(ddRankSetup.numPPRanks, ddRankSetup.numRanksDoingPme));
 
     for (int x = 0; x < ddRankSetup.numPPCells[XX]; x++)
     {
@@ -941,12 +945,12 @@ static void make_load_communicator(gmx_domdec_t* dd, int dim_ind, ivec loc)
 }
 #endif
 
-void dd_setup_dlb_resource_sharing(const t_commrec* cr, int gpu_id)
+void dd_setup_dlb_resource_sharing(const t_commrec* cr, const size_t uniqueDeviceId)
 {
 #if GMX_MPI
     gmx_domdec_t* dd = cr->dd;
 
-    if (!thisRankHasDuty(cr, DUTY_PP) || gpu_id < 0)
+    if (!thisRankHasDuty(cr, DUTY_PP))
     {
         /* Only ranks with short-ranged tasks (currently) use GPUs.
          * If we don't have GPUs assigned, there are no resources to share.
@@ -963,11 +967,6 @@ void dd_setup_dlb_resource_sharing(const t_commrec* cr, int gpu_id)
 
     const int physicalnode_id_hash = gmx_physicalnode_id_hash();
 
-    if (debug)
-    {
-        fprintf(debug, "dd_setup_dd_dlb_gpu_sharing:\n");
-        fprintf(debug, "DD PP rank %d physical node hash %d gpu_id %d\n", dd->rank, physicalnode_id_hash, gpu_id);
-    }
     /* Split the PP communicator over the physical nodes */
     /* TODO: See if we should store this (before), as it's also used for
      * for the nodecomm summation.
@@ -976,14 +975,9 @@ void dd_setup_dlb_resource_sharing(const t_commrec* cr, int gpu_id)
     // the need for per-node per-group communicators.
     MPI_Comm mpi_comm_pp_physicalnode;
     MPI_Comm_split(dd->mpi_comm_all, physicalnode_id_hash, dd->rank, &mpi_comm_pp_physicalnode);
-    MPI_Comm_split(mpi_comm_pp_physicalnode, gpu_id, dd->rank, &dd->comm->mpi_comm_gpu_shared);
+    MPI_Comm_split(mpi_comm_pp_physicalnode, static_cast<int>(uniqueDeviceId), dd->rank, &dd->comm->mpi_comm_gpu_shared);
     MPI_Comm_free(&mpi_comm_pp_physicalnode);
     MPI_Comm_size(dd->comm->mpi_comm_gpu_shared, &dd->comm->nrank_gpu_shared);
-
-    if (debug)
-    {
-        fprintf(debug, "nrank_gpu_shared %d\n", dd->comm->nrank_gpu_shared);
-    }
 
     /* Note that some ranks could share a GPU, while others don't */
 
@@ -993,7 +987,7 @@ void dd_setup_dlb_resource_sharing(const t_commrec* cr, int gpu_id)
     }
 #else
     GMX_UNUSED_VALUE(cr);
-    GMX_UNUSED_VALUE(gpu_id);
+    GMX_UNUSED_VALUE(uniqueDeviceId);
 #endif
 }
 
@@ -1051,18 +1045,21 @@ static void make_load_communicators(gmx_domdec_t gmx_unused* dd)
 /*! \brief Sets up the relation between neighboring domains and zones */
 static void setup_neighbor_relations(gmx_domdec_t* dd)
 {
-    ivec tmp, s;
     GMX_ASSERT((dd->ndim >= 0) && (dd->ndim <= DIM), "Must have valid number of dimensions for DD");
+
+    const std::array<int, 2> shifts = { 1, -1 };
 
     for (int d = 0; d < dd->ndim; d++)
     {
         const int dim = dd->dim[d];
-        copy_ivec(dd->ci, tmp);
-        tmp[dim]           = (tmp[dim] + 1) % dd->numCells[dim];
-        dd->neighbor[d][0] = ddcoord2ddnodeid(dd, tmp);
-        copy_ivec(dd->ci, tmp);
-        tmp[dim]           = (tmp[dim] - 1 + dd->numCells[dim]) % dd->numCells[dim];
-        dd->neighbor[d][1] = ddcoord2ddnodeid(dd, tmp);
+
+        for (gmx::Index i = 0; i < gmx::ssize(shifts); i++)
+        {
+            gmx::IVec tmp      = dd->ci;
+            tmp[dim]           = (tmp[dim] + shifts[i] + dd->numCells[dim]) % dd->numCells[dim];
+            dd->neighbor[d][i] = ddRankFromDDCoord(*dd, tmp);
+        }
+
         if (debug)
         {
             fprintf(debug,
@@ -1072,82 +1069,6 @@ static void setup_neighbor_relations(gmx_domdec_t* dd)
                     dd->neighbor[d][0],
                     dd->neighbor[d][1]);
         }
-    }
-
-    int nzone  = (1 << dd->ndim);
-    int nizone = (1 << std::max(dd->ndim - 1, 0));
-    assert(nizone >= 1 && nizone <= DD_MAXIZONE);
-
-    gmx_domdec_zones_t* zones = &dd->comm->zones;
-
-    for (int i = 0; i < nzone; i++)
-    {
-        int m = 0;
-        clear_ivec(zones->shift[i]);
-        for (int d = 0; d < dd->ndim; d++)
-        {
-            zones->shift[i][dd->dim[d]] = dd_zo[i][m++];
-        }
-    }
-
-    zones->n = nzone;
-    for (int i = 0; i < nzone; i++)
-    {
-        for (int d = 0; d < DIM; d++)
-        {
-            s[d] = dd->ci[d] - zones->shift[i][d];
-            if (s[d] < 0)
-            {
-                s[d] += dd->numCells[d];
-            }
-            else if (s[d] >= dd->numCells[d])
-            {
-                s[d] -= dd->numCells[d];
-            }
-        }
-    }
-    for (int iZoneIndex = 0; iZoneIndex < nizone; iZoneIndex++)
-    {
-        GMX_RELEASE_ASSERT(
-                ddNonbondedZonePairRanges[iZoneIndex][0] == iZoneIndex,
-                "The first element for each ddNonbondedZonePairRanges should match its index");
-
-        DDPairInteractionRanges iZone;
-        iZone.iZoneIndex = iZoneIndex;
-        /* dd_zp3 is for 3D decomposition, for fewer dimensions use only
-         * j-zones up to nzone.
-         */
-        iZone.jZoneRange = gmx::Range<int>(std::min(ddNonbondedZonePairRanges[iZoneIndex][1], nzone),
-                                           std::min(ddNonbondedZonePairRanges[iZoneIndex][2], nzone));
-        for (int dim = 0; dim < DIM; dim++)
-        {
-            if (dd->numCells[dim] == 1)
-            {
-                /* All shifts should be allowed */
-                iZone.shift0[dim] = -1;
-                iZone.shift1[dim] = 1;
-            }
-            else
-            {
-                /* Determine the min/max j-zone shift wrt the i-zone */
-                iZone.shift0[dim] = 1;
-                iZone.shift1[dim] = -1;
-                for (int jZone : iZone.jZoneRange)
-                {
-                    int shift_diff = zones->shift[jZone][dim] - zones->shift[iZoneIndex][dim];
-                    if (shift_diff < iZone.shift0[dim])
-                    {
-                        iZone.shift0[dim] = shift_diff;
-                    }
-                    if (shift_diff > iZone.shift1[dim])
-                    {
-                        iZone.shift1[dim] = shift_diff;
-                    }
-                }
-            }
-        }
-
-        zones->iZones.push_back(iZone);
     }
 
     if (!isDlbDisabled(dd->comm->dlbState))
@@ -1986,18 +1907,6 @@ static DDSystemInfo getSystemInfo(const gmx::MDLogger&              mdlog,
                 systemInfo.cutoff = std::max(systemInfo.cutoff, systemInfo.minCutoffForMultiBody);
             }
         }
-        else if (ir.bPeriodicMols)
-        {
-            /* Can not easily determine the required cut-off */
-            GMX_LOG(mdlog.warning)
-                    .appendText(
-                            "NOTE: Periodic molecules are present in this system. Because of this, "
-                            "the domain decomposition algorithm cannot easily determine the "
-                            "minimum cell size that it requires for treating bonded interactions. "
-                            "Instead, domain decomposition will assume that half the non-bonded "
-                            "cut-off will be a suitable lower bound.");
-            systemInfo.minCutoffForMultiBody = systemInfo.cutoff / 2;
-        }
         else
         {
             real r_2b = 0;
@@ -2075,6 +1984,9 @@ static DDSystemInfo getSystemInfo(const gmx::MDLogger&              mdlog,
         systemInfo.constraintCommunicationRange = options.constraintCommunicationRange;
     }
     systemInfo.cellsizeLimit = std::max(systemInfo.cellsizeLimit, systemInfo.constraintCommunicationRange);
+
+    systemInfo.haveBoxDeformation = ir_haveBoxDeformation(ir);
+    setBoxDeformationRate(ir.deform, box, systemInfo.boxDeformationRate);
 
     return systemInfo;
 }
@@ -2739,7 +2651,10 @@ static DDSettings getDDSettings(const gmx::MDLogger&     mdlog,
     return ddSettings;
 }
 
-gmx_domdec_t::gmx_domdec_t(const t_inputrec& ir) : unitCellInfo(ir) {}
+gmx_domdec_t::gmx_domdec_t(const t_inputrec& ir, gmx::ArrayRef<const int> ddDims) :
+    unitCellInfo(ir), zones(ddDims)
+{
+}
 
 gmx_domdec_t::~gmx_domdec_t() = default;
 
@@ -2774,7 +2689,7 @@ public:
     //! Build the resulting DD manager
     std::unique_ptr<gmx_domdec_t> build(LocalAtomSetManager*       atomSets,
                                         const gmx_localtop_t&      localTopology,
-                                        const t_state&             localState,
+                                        const t_state*             localState,
                                         ObservablesReducerBuilder* observablesReducerBuilder);
 
     //! Objects used in constructing and configuring DD
@@ -2926,10 +2841,11 @@ DomainDecompositionBuilder::Impl::Impl(const MDLogger&                   mdlog,
 
 std::unique_ptr<gmx_domdec_t> DomainDecompositionBuilder::Impl::build(LocalAtomSetManager* atomSets,
                                                                       const gmx_localtop_t& localTopology,
-                                                                      const t_state& localState,
+                                                                      const t_state* localState,
                                                                       ObservablesReducerBuilder* observablesReducerBuilder)
 {
-    auto dd = std::make_unique<gmx_domdec_t>(ir_);
+    auto dd = std::make_unique<gmx_domdec_t>(
+            ir_, arrayRefFromArray(ddGridSetup_.ddDimensions, ddGridSetup_.numDDDimensions));
 
     copy_ivec(ddCellIndex_, dd->ci);
 
@@ -3020,7 +2936,7 @@ DomainDecompositionBuilder::DomainDecompositionBuilder(const MDLogger&          
 
 std::unique_ptr<gmx_domdec_t> DomainDecompositionBuilder::build(LocalAtomSetManager*  atomSets,
                                                                 const gmx_localtop_t& localTopology,
-                                                                const t_state&        localState,
+                                                                const t_state*        localState,
                                                                 ObservablesReducerBuilder* observablesReducerBuilder)
 {
     return impl_->build(atomSets, localTopology, localState, observablesReducerBuilder);
@@ -3208,7 +3124,7 @@ void dd_init_local_state(const gmx_domdec_t& dd, const t_state* state_global, t_
 
     if (DDMAIN(dd))
     {
-        buf[0] = state_global->flags;
+        buf[0] = state_global->flags();
         buf[1] = state_global->ngtc;
         buf[2] = state_global->nnhpres;
         buf[3] = state_global->nhchainlength;
@@ -3218,7 +3134,7 @@ void dd_init_local_state(const gmx_domdec_t& dd, const t_state* state_global, t_
 
     init_gtc_state(state_local, buf[1], buf[2], buf[3]);
     init_dfhist_state(state_local, buf[4]);
-    state_local->flags = buf[0];
+    state_local->setFlags(buf[0]);
 }
 
 void putUpdateGroupAtomsInSamePeriodicImage(const gmx_domdec_t&      dd,

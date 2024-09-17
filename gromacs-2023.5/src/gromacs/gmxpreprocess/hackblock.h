@@ -45,6 +45,7 @@
 #include <vector>
 
 #include "gromacs/gmxpreprocess/notset.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/utility/enumerationhelpers.h"
 
@@ -145,7 +146,7 @@ struct PreprocessResidue
     //! List of bonded interactions to potentially add.
     gmx::EnumerationArray<BondedTypes, BondedInteractionList> rb;
     //! Get number of atoms in residue.
-    int natom() const { return atom.size(); }
+    int natom() const;
 };
 
 //! Declare different types of hacks for later check.

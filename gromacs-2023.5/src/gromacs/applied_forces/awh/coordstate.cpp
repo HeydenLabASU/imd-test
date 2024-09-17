@@ -46,15 +46,20 @@
 #include "coordstate.h"
 
 #include <algorithm>
+#include <string>
 
+#include "gromacs/applied_forces/awh/dimparams.h"
 #include "gromacs/math/utilities.h"
 #include "gromacs/mdtypes/awh_history.h"
 #include "gromacs/mdtypes/awh_params.h"
+#include "gromacs/random/seed.h"
 #include "gromacs/random/threefry.h"
 #include "gromacs/random/uniformrealdistribution.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/stringutil.h"
 
 #include "biasgrid.h"
@@ -108,7 +113,7 @@ int getSampleFromDistribution(ArrayRef<const double> distr, int64_t seed, int64_
 
     cumulativeDistribution[0] = distr[0];
 
-    for (gmx::index i = 1; i < distr.ssize(); i++)
+    for (gmx::Index i = 1; i < distr.ssize(); i++)
     {
         cumulativeDistribution[i] = cumulativeDistribution[i - 1] + distr[i];
     }

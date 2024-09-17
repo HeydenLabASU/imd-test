@@ -46,12 +46,24 @@
  */
 #include "gmxpre.h"
 
+#include <cstdlib>
+#include <cstring>
+
 #include <algorithm>
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
 
 #include "gromacs/hardware/device_management.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/iserializer.h"
+#include "gromacs/utility/mpiinfo.h"
+#include "gromacs/utility/stringutil.h"
 
 #include "device_information.h"
 
@@ -163,6 +175,40 @@ bool deviceIdIsCompatible(gmx::ArrayRef<const std::unique_ptr<DeviceInformation>
     return (*foundIt)->status == DeviceStatus::Compatible;
 }
 
+gmx::GpuAwareMpiStatus getMinimalSupportedGpuAwareMpiStatus(
+        gmx::ArrayRef<const std::unique_ptr<DeviceInformation>> deviceInfoList)
+{
+    gmx::GpuAwareMpiStatus minVal                 = gmx::GpuAwareMpiStatus::Supported;
+    bool                   foundACompatibleDevice = false;
+    for (const auto& deviceInfo : deviceInfoList)
+    {
+        // In all cases, the level of GPU-aware support that is
+        // relevant for further GROMACS decision making is the minimal
+        // level found over the compatible devices.
+        //
+        // There can be incompatible devices detected for several
+        // reasons, including a mix of devices from a single vendor,
+        // of which some are too old.
+        //
+        // Also, by default dpcpp makes the same Intel GPU visible
+        // from two backends. In such cases, GROMACS chooses a
+        // preferred backend and leaves only the matching devices with
+        // DeviceStatus::Compatible.
+        if (deviceInfo->status == DeviceStatus::Compatible)
+        {
+            minVal                 = std::min(minVal, deviceInfo->gpuAwareMpiStatus);
+            foundACompatibleDevice = true;
+        }
+    }
+    // If there were no compatible devices, then there is no
+    // support for GPU-aware MPI.
+    if (!foundACompatibleDevice)
+    {
+        minVal = gmx::GpuAwareMpiStatus::NotSupported;
+    }
+    return minVal;
+}
+
 std::string getDeviceCompatibilityDescription(const gmx::ArrayRef<const std::unique_ptr<DeviceInformation>> deviceInfoList,
                                               int deviceId)
 {
@@ -197,4 +243,55 @@ std::vector<std::unique_ptr<DeviceInformation>> deserializeDeviceInformations(gm
         serializer->doOpaque(reinterpret_cast<char*>(deviceInfoList[i].get()), sizeof(DeviceInformation));
     }
     return deviceInfoList;
+}
+
+namespace
+{
+
+//! Unecessarily declare the function below, to keep nvcc and clang-tidy happy simultaneously
+size_t hashCombine(size_t seed, std::byte c);
+
+/*! \brief Combine \c seed with \c c to produce a combined hash
+ *
+ * The resulting seed is suitable to pass to a future call to this function.
+ *
+ * Implementation is like that of Boost 1.33. It has been superseded
+ * in Boost, but its simplicity is enough for this use case. The
+ * hexadecimal constant is an arbitrary non-zero value, which avoids
+ * producing zero when all inputs were zero. */
+size_t hashCombine(const size_t seed, std::byte c)
+{
+    return seed ^ (std::hash<std::byte>{}(c) + 0x9e3779b9 + (seed << 6) + (seed >> 2));
+}
+
+//! Functor for hashing an array of \c N bytes
+struct HashAnArray
+{
+    template<size_t N>
+    std::size_t operator()(const std::array<std::byte, N>& a) const noexcept
+    {
+        size_t seed = 0;
+        for (const auto& c : a)
+        {
+            seed = hashCombine(seed, c);
+        }
+        return seed;
+    }
+};
+
+} // namespace
+
+size_t uniqueDeviceId(const DeviceInformation& deviceInfo)
+{
+    if (deviceInfo.uuid.has_value())
+    {
+        HashAnArray hasher;
+        return hasher(deviceInfo.uuid.value());
+    }
+    return std::hash<int>{}(deviceInfo.id);
+}
+
+std::optional<std::array<std::byte, 16>> uuidForDevice(const DeviceInformation& deviceInfo)
+{
+    return deviceInfo.uuid;
 }

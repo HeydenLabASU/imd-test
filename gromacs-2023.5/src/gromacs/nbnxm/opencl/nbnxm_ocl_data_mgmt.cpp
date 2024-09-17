@@ -49,7 +49,6 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "gromacs/gpu_utils/pmalloc.h"
 #include "gromacs/hardware/device_information.h"
 #include "gromacs/hardware/device_management.h"
 #include "gromacs/math/vectypes.h"
@@ -72,7 +71,7 @@
 
 #include "nbnxm_ocl_types.h"
 
-namespace Nbnxm
+namespace gmx
 {
 
 /*! \brief This parameter should be determined heuristically from the
@@ -227,4 +226,4 @@ int gpu_min_ci_balanced(NbnxmGpu* nb)
     }
 }
 
-} // namespace Nbnxm
+} // namespace gmx

@@ -41,9 +41,16 @@
 
 #include "gromacs/mdtypes/observablesreducer.h"
 
+#include <cstddef>
+
+#include <algorithm>
+#include <functional>
 #include <numeric>
 #include <optional>
+#include <string>
 #include <tuple>
+#include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -312,7 +319,7 @@ public:
             for (int i = 0; i < numSubscribers_; ++i)
             {
                 // Ensure each subscriber sends a different (but small) amount of data
-                rankData.subscribers.emplace_back(Subscriber(i, numRanks));
+                rankData.subscribers.emplace_back(i, numRanks);
             }
             // Now that the addresses of the subscribers are
             // stable, set up the build-time callback.
@@ -551,7 +558,7 @@ TEST_P(ObservablesReducerIntegrationTest, CanBuildAndUseWhenASubscriberUsesEvent
 
     // This will do nothing, as all the communication buffers are
     // empty, but we can't directly test that nothing
-    // occured. Instead, we will later do some
+    // occurred. Instead, we will later do some
     // ReductionRequirement::Soon work and observe that result is
     // consistent with exactly one reduction.
     fakeMpiAllReduce(reductionRequiredExternally);

@@ -48,11 +48,12 @@
 #include "nbnxm_cuda_types.h"
 
 // TODO Remove this comment when the above order issue is resolved
+#include <cub/device/device_scan.cuh>
+
 #include "gromacs/gpu_utils/cudautils.cuh"
 #include "gromacs/gpu_utils/device_context.h"
 #include "gromacs/gpu_utils/gpu_utils.h"
 #include "gromacs/gpu_utils/gpueventsynchronizer.h"
-#include "gromacs/gpu_utils/pmalloc.h"
 #include "gromacs/hardware/device_information.h"
 #include "gromacs/hardware/device_management.h"
 #include "gromacs/math/vectypes.h"
@@ -61,6 +62,7 @@
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/nbnxm/atomdata.h"
 #include "gromacs/nbnxm/gpu_data_mgmt.h"
+#include "gromacs/nbnxm/gpu_types_common.h"
 #include "gromacs/nbnxm/gridset.h"
 #include "gromacs/nbnxm/nbnxm.h"
 #include "gromacs/nbnxm/nbnxm_gpu.h"
@@ -75,8 +77,12 @@
 #include "gromacs/utility/smalloc.h"
 
 #include "nbnxm_cuda.h"
+/* Required to stop gcc emitting multiple definition warnings as cuda_fp16.h, which is included by
+ * device_scan.cuh, doesn't undef __WSB_DEPRECATION_MESSAGE and this is later redefined in
+ * device_atomic_functions.h used by nbnxm_cuda_types.h. Seen in cuda 10 and 11 with gcc-11. */
+#undef __WSB_DEPRECATION_MESSAGE
 
-namespace Nbnxm
+namespace gmx
 {
 
 /* This is a heuristically determined parameter for the Kepler
@@ -87,7 +93,15 @@ namespace Nbnxm
  * there is a bit of fluctuations in the generated block counts, we use
  * a target of 44 instead of the ideal value of 48.
  */
+
+#if GMX_PTX_ARCH <= 700
 static const unsigned int gpu_min_ci_balanced_factor = 44;
+#else
+/* Updated benchmarking on Ampere, Ada, Hopper shows the ideal count is
+ * between 61 and 83 depending on chip */
+static const unsigned int gpu_min_ci_balanced_factor = 61;
+#endif
+
 
 void gpu_init_platform_specific(NbnxmGpu* /* nb */)
 {
@@ -107,4 +121,37 @@ int gpu_min_ci_balanced(NbnxmGpu* nb)
                          : 0;
 }
 
-} // namespace Nbnxm
+namespace
+{
+
+size_t cudaCubWrapper(size_t              temporaryBufferSize,
+                      char*               temporaryBuffer,
+                      GpuPairlist*        d_plist,
+                      const DeviceStream& deviceStream)
+{
+    size_t size = temporaryBufferSize;
+    cub::DeviceScan::ExclusiveSum(temporaryBuffer,
+                                  size,
+                                  d_plist->sorting.sciHistogram,
+                                  d_plist->sorting.sciOffset,
+                                  c_sciHistogramSize,
+                                  deviceStream.stream());
+    return size;
+}
+
+} // namespace
+
+size_t getExclusiveScanWorkingArraySize(GpuPairlist* plist, const DeviceStream& deviceStream)
+{
+    return cudaCubWrapper(0, nullptr, plist, deviceStream);
+}
+
+void performExclusiveScan(size_t              temporaryBufferSize,
+                          char*               temporaryBuffer,
+                          GpuPairlist*        plist,
+                          const DeviceStream& deviceStream)
+{
+    std::ignore = cudaCubWrapper(temporaryBufferSize, temporaryBuffer, plist, deviceStream);
+}
+
+} // namespace gmx

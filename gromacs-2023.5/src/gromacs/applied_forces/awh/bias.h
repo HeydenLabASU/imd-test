@@ -50,11 +50,18 @@
 #ifndef GMX_AWH_BIAS_H
 #define GMX_AWH_BIAS_H
 
+#include <cstdint>
+#include <cstdio>
+
+#include <algorithm>
+#include <iterator>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "gromacs/math/vectypes.h"
 #include "gromacs/utility/alignedallocator.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/gmxassert.h"
 
@@ -283,7 +290,7 @@ public:
     inline const BiasState& state() const { return state_; }
 
     //! Returns the index of the bias.
-    inline int biasIndex() const { return params_.biasIndex; }
+    inline int biasIndex() const { return params_.biasIndex_; }
 
     /*! \brief Return the coordinate value for a grid point.
      *

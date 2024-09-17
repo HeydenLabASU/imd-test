@@ -95,12 +95,7 @@ struct LincsGpuKernelParameters
     DeviceBuffer<AtomPair> d_constraints;
     //! Equilibrium distances for the constraints (GPU)
     DeviceBuffer<float> d_constraintsTargetLengths;
-    /*! \brief Whether there are coupled constraints.
-     *
-     * In SYCL, the accessors can not be initialized with an empty buffer.
-     * In case there are no coupled constraints, the respective buffers below are
-     * empty. So we need to inform the kernel launcher that these are optional.
-     */
+    //! \brief Whether there are coupled constraints.
     bool haveCoupledConstraints = false;
     //! Number of constraints, coupled with the current one (GPU)
     DeviceBuffer<int> d_coupledConstraintsCounts;
@@ -121,7 +116,7 @@ public:
      *
      * \param[in] numIterations    Number of iteration for the correction of the projection.
      * \param[in] expansionOrder   Order of the matrix inversion algorithm.
-     * \param[in] deviceContext    Device context (dummy in CUDA).
+     * \param[in] deviceContext    Device context.
      * \param[in] deviceStream     Device command stream.
      */
     LincsGpu(int                  numIterations,

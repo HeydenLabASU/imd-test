@@ -38,7 +38,10 @@
 #include <cmath>
 #include <cstdio>
 
+#include "gromacs/math/vectypes.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/compare.h"
+#include "gromacs/utility/real.h"
 
 void cmp_rvec(FILE* fp, const char* s, int index, const rvec i1, const rvec i2, real ftol, real abstol)
 {
@@ -114,7 +117,7 @@ static void cmp_rvecs_rmstol(FILE* fp, const char* title, int n, const rvec x1[]
             rms += x1[i][m] * x1[i][m] + x2[i][m] * x2[i][m];
         }
     }
-    rms = sqrt(rms / (2 * n * DIM));
+    rms = std::sqrt(rms / (2 * n * DIM));
 
     /* Convert the relative tolerance into an absolute tolerance */
     if (ftol * rms < abstol)

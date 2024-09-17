@@ -38,11 +38,14 @@
 
 #include "config.h"
 
+#include <climits>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 
 #include <algorithm>
+#include <filesystem>
+#include <vector>
 
 #include "gromacs/gmxlib/network.h"
 #include "gromacs/math/functions.h"
@@ -56,6 +59,8 @@
 #include "gromacs/mdtypes/state.h"
 #include "gromacs/pbcutil/ishift.h"
 #include "gromacs/pbcutil/pbc.h"
+#include "gromacs/topology/forcefieldparameters.h"
+#include "gromacs/topology/idef.h"
 #include "gromacs/topology/mtop_atomloops.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
@@ -194,10 +199,10 @@ void init_disres(FILE*                 fplog,
 
         hist = &state->hist;
         /* Set the "history lack" factor to 1 */
-        state->flags |= enumValueToBitMask(StateEntry::DisreInitF);
+        state->addEntry(StateEntry::DisreInitF);
         hist->disre_initf = 1.0;
         /* Allocate space for the r^-3 time averages */
-        state->flags |= enumValueToBitMask(StateEntry::DisreRm3Tav);
+        state->addEntry(StateEntry::DisreRm3Tav);
         hist->disre_rm3tav.resize(dd->npair);
     }
     /* Allocate space for a copy of rm3tav,
@@ -520,7 +525,7 @@ real ta_disres(int              nfa,
             if (!bMixed)
             {
                 f_scal = -k0 * tav_viol;
-                violtot += fabs(tav_viol) * pairFac;
+                violtot += std::fabs(tav_viol) * pairFac;
             }
             else
             {

@@ -65,13 +65,15 @@ public:
      * \param[in] pmeRank           Rank of PME task
      * \param[in] pmeCpuForceBuffer Buffer for PME force in CPU memory
      * \param[in] deviceContext     GPU context.
-     * \param[in] deviceStream      GPU stream.
+     * \param[in] deviceStream      Device stream.
+     * \param[in] useNvshmem        NVSHMEM enable/disable for GPU comm.
      */
     Impl(MPI_Comm                    comm,
          int                         pmeRank,
          gmx::HostVector<gmx::RVec>* pmeCpuForceBuffer,
          const DeviceContext&        deviceContext,
-         const DeviceStream&         deviceStream);
+         const DeviceStream&         deviceStream,
+         bool                        useNvshmem);
     ~Impl();
 
     /*! \brief Perform steps required when buffer size changes
@@ -119,6 +121,11 @@ public:
      */
     GpuEventSynchronizer* getForcesReadySynchronizer();
 
+    /*! \brief
+     * Return pointer to NVSHMEM sync object used for staging PME force on GPU
+     */
+    DeviceBuffer<uint64_t> getGpuForcesSyncObj();
+
 private:
     /*! \brief Receive buffer from GPU memory on PME rank to either
      * GPU or CPU memory on PP rank. Data is pushed from PME force
@@ -159,9 +166,9 @@ private:
                                          int                   sendSize,
                                          GpuEventSynchronizer* coordinatesReadyOnDeviceEvent);
 
-    //! GPU context handle (not used in CUDA)
+    //! Device context handle
     const DeviceContext& deviceContext_;
-    //! Handle for CUDA stream used for the communication operations in this class
+    //! Handle for the device stream used for the communication operations in this class
     const DeviceStream& pmePpCommStream_;
     //! Remote location of PME coordinate data buffer
     Float3* remotePmeXBuffer_ = nullptr;
@@ -177,6 +184,12 @@ private:
     int d_pmeForcesSize_ = -1;
     //! number of atoms allocated in recvbuf array
     int d_pmeForcesSizeAlloc_ = -1;
+    //! PME force synchronization NVSHMEM object
+    DeviceBuffer<uint64_t> forcesReadyNvshmemFlags;
+    //! PME force synchronization NVSHMEM object size tracker
+    int forcesReadyNvshmemFlagsSize_ = -1;
+    //! PME force synchronization NVSHMEM object size tracker
+    int forcesReadyNvshmemFlagsSizeAlloc_ = -1;
     //! Event recorded when PME forces are ready on PME task
     GpuEventSynchronizer forcesReadySynchronizer_;
     //! Event recorded when coordinates have been transferred to PME task
@@ -199,6 +212,8 @@ private:
     MPI_Request coordinateSendRequest_;
     // Flag on whether a non-blocking coordinate send is active
     bool coordinateSendRequestIsActive_ = false;
+    // Flag on whether to use NVSHMEM for GPU communication
+    bool useNvshmem_ = false;
 };
 
 } // namespace gmx

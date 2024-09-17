@@ -42,34 +42,45 @@
 
 #include "gmxpre.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "gromacs/applied_forces/awh/read_params.h"
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/fileio/enxio.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/oenv.h"
 #include "gromacs/fileio/tpxio.h"
 #include "gromacs/fileio/trxio.h"
 #include "gromacs/fileio/xvgr.h"
 #include "gromacs/gmxana/gmx_ana.h"
 #include "gromacs/math/units.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdtypes/awh_params.h"
 #include "gromacs/mdtypes/inputrec.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/trajectory/energyframe.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/arraysize.h"
 #include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
 #include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/stringutil.h"
+
+struct gmx_output_env_t;
 
 using gmx::AwhBiasParams;
 using gmx::AwhParams;
@@ -370,6 +381,9 @@ void OutputFile::initializeFrictionOutputFile(int                  subBlockStart
     firstGraphSubBlock_ = subBlockStart + numSubBlocks - numTensorElements;
     numGraph_           = numTensorElements;
     useKTForEnergy_     = (energyUnit == EnergyUnit::KT);
+    // For the the bias and the PMF in the awh output file this factor converts energy.
+    // For the friction output, which has units energy^2*time, this converts energy
+    // and also divides by kT to get from the metric tensor to friction.
     scaleFactor_.resize(numGraph_, useKTForEnergy_ ? 1 : kTValue);
     int numLegend = numDim_ - 1 + numGraph_;
     legend_       = makeLegend(awhBiasParams, OutputFileType::Friction, numLegend);
@@ -409,7 +423,7 @@ AwhReader::AwhReader(const AwhParams&  awhParams,
     int subblockStart = 0;
     for (int k = 0; k < awhParams.numBias(); k++)
     {
-        const AwhBiasParams& awhBiasParams = awhParams.awhBiasParams()[k];
+        const AwhBiasParams& awhBiasParams = awhParams.awhBiasParams(k);
 
         int numSubBlocks = static_cast<int>(block->sub[subblockStart].fval[0]);
 
@@ -429,8 +443,8 @@ AwhReader::AwhReader(const AwhParams&  awhParams,
                     subblockStart, numSubBlocks, awhBiasParams, energyUnit, kT);
         }
 
-        biasOutputSetups_.emplace_back(BiasOutputSetup(
-                subblockStart, std::move(awhOutputFile), std::move(frictionOutputFile)));
+        biasOutputSetups_.emplace_back(
+                subblockStart, std::move(awhOutputFile), std::move(frictionOutputFile));
 
         subblockStart += numSubBlocks;
     }

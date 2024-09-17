@@ -34,8 +34,10 @@
 #include "gmxpre.h"
 
 #include <cmath>
+#include <cstdint>
 
 #include <memory>
+#include <string>
 #include <tuple>
 #include <vector>
 
@@ -43,10 +45,17 @@
 #include <gtest/gtest.h>
 
 #include "gromacs/applied_forces/awh/bias.h"
+#include "gromacs/applied_forces/awh/biasparams.h"
+#include "gromacs/applied_forces/awh/biasstate.h"
+#include "gromacs/applied_forces/awh/coordstate.h"
 #include "gromacs/applied_forces/awh/correlationgrid.h"
+#include "gromacs/applied_forces/awh/dimparams.h"
 #include "gromacs/applied_forces/awh/pointstate.h"
 #include "gromacs/applied_forces/awh/tests/awh_setup.h"
 #include "gromacs/mdtypes/awh_params.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/exceptions.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/stringutil.h"
 
 #include "testutils/refdata.h"
@@ -85,7 +94,7 @@ public:
         /* We test all combinations of:
          *   eawhgrowth:
          *     eawhgrowthLINEAR:     final, normal update phase
-         *     ewahgrowthEXP_LINEAR: intial phase, updated size is constant
+         *     ewahgrowthEXP_LINEAR: initial phase, updated size is constant
          *   eawhpotential (test only eawhpotentialUMBRELLA (MC) for FEP lambda dimensions)
          *   disableUpdateSkips (should not affect the results):
          *     BiasParams::DisableUpdateSkips::yes: update the point state for every sample

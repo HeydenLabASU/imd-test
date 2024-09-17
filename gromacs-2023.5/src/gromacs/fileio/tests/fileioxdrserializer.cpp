@@ -41,11 +41,20 @@
 
 #include "gmxpre.h"
 
+#include <cstdint>
+#include <cstdio>
+
+#include <filesystem>
+#include <string>
+#include <type_traits>
+#include <vector>
+
 #include <gtest/gtest.h>
 
 #include "gromacs/fileio/gmxfio.h"
 #include "gromacs/fileio/gmxfio_xdr.h"
 #include "gromacs/utility/futil.h"
+#include "gromacs/utility/real.h"
 
 #include "testutils/testfilemanager.h"
 
@@ -113,13 +122,13 @@ public:
     // Make sure the file extension is one that gmx_fio_open will
     // recognize to open as binary, even though we're just abusing it
     // to write arbitrary XDR output.
-    std::string filename_ = fileManager_.getTemporaryFilePath("data.edr").u8string();
-    t_fileio*   file_     = nullptr;
+    std::filesystem::path filename_ = fileManager_.getTemporaryFilePath("data.edr");
+    t_fileio*             file_     = nullptr;
 };
 
 TEST_F(FileIOXdrSerializerTest, SizeIsCorrect)
 {
-    file_ = gmx_fio_open(filename_.c_str(), "w");
+    file_ = gmx_fio_open(filename_, "w");
     FileIOXdrSerializer serializer(file_);
     // These types all have well-defined widths in bytes AFTER XDR serialization,
     // which we can test below.
@@ -138,7 +147,7 @@ TEST_F(FileIOXdrSerializerTest, SizeIsCorrect)
     serializer.doInt64Array(int64Buffer.data(), int64Buffer.size()); // 16 bytes
     gmx_fio_close(file_);
 
-    file_ = gmx_fio_open(filename_.c_str(), "r");
+    file_ = gmx_fio_open(filename_, "r");
 
     // Determine file size
     gmx_fseek(gmx_fio_getfp(file_), 0, SEEK_END);

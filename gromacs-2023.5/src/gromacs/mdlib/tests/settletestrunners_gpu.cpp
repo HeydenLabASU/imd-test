@@ -41,7 +41,12 @@
 
 #include "config.h"
 
+#include <string>
+
 #include <gtest/gtest.h>
+
+#include "gromacs/pbcutil/pbc.h"
+#include "gromacs/utility/basedefinitions.h"
 
 #include "settletestrunners.h"
 
@@ -55,6 +60,7 @@ namespace gmx
 {
 namespace test
 {
+class SettleTestData;
 
 #if GPU_SETTLE_SUPPORTED
 
@@ -64,9 +70,9 @@ void SettleDeviceTestRunner::applySettle(SettleTestData* testData,
                                          const bool      calcVirial,
                                          const std::string& /* testDescription */)
 {
-    testDevice_.activate();
     const DeviceContext& deviceContext = testDevice_.deviceContext();
     const DeviceStream&  deviceStream  = testDevice_.deviceStream();
+    deviceContext.activate();
 
     auto settleGpu = std::make_unique<SettleGpu>(testData->mtop_, deviceContext, deviceStream);
 

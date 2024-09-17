@@ -37,12 +37,16 @@
 
 #include "config.h"
 
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include <algorithm>
+#include <filesystem>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "gromacs/commandline/filenm.h"
@@ -59,6 +63,7 @@
 #include "gromacs/math/units.h"
 #include "gromacs/math/utilities.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdlib/groupcoord.h"
 #include "gromacs/mdlib/stat.h"
 #include "gromacs/mdrunutility/handlerestart.h"
@@ -72,12 +77,20 @@
 #include "gromacs/timing/wallcycle.h"
 #include "gromacs/topology/mtop_lookup.h"
 #include "gromacs/topology/mtop_util.h"
+#include "gromacs/topology/topology.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/futil.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/pleasecite.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/stringutil.h"
+
+struct gmx_output_env_t;
 
 static const std::string RotStr = { "Enforced rotation:" };
 
@@ -615,7 +628,7 @@ real add_rot_forces(gmx_enfrot* er, gmx::ArrayRef<gmx::RVec> force, const t_comm
         gmx_enfrotgrp* erg = &ergRef;
         Vrot += erg->V; /* add the local parts from the nodes */
         const auto& localRotationGroupIndex = erg->atomSet->localIndex();
-        for (gmx::index l = 0; l < localRotationGroupIndex.ssize(); l++)
+        for (gmx::Index l = 0; l < localRotationGroupIndex.ssize(); l++)
         {
             /* Get the right index of the local force */
             int ii = localRotationGroupIndex[l];
@@ -674,7 +687,7 @@ static double calc_beta_max(real min_gaussian, real slab_dist)
         gmx_fatal(FARGS, "min_gaussian of flexible rotation groups must be <%g", GAUSS_NORM);
     }
 
-    return std::sqrt(-2.0 * sigma * sigma * log(min_gaussian / GAUSS_NORM));
+    return std::sqrt(-2.0 * sigma * sigma * std::log(min_gaussian / GAUSS_NORM));
 }
 
 
@@ -693,7 +706,7 @@ static inline real gaussian_weight(rvec curr_x, const gmx_enfrotgrp* erg, int n)
     /* Define the sigma value */
     sigma = 0.7 * erg->rotg->slab_dist;
     /* Calculate the Gaussian value of slab n for position curr_x */
-    return norm * exp(-0.5 * gmx::square(calc_beta(curr_x, erg, n) / sigma));
+    return norm * std::exp(-0.5 * gmx::square(calc_beta(curr_x, erg, n) / sigma));
 }
 
 
@@ -800,8 +813,8 @@ static void calc_rotmat(const rvec vec,
     copy_rvec(vec, rot_vec);
 
     /* Precompute some variables: */
-    cosa   = cos(radangle);
-    sina   = sin(radangle);
+    cosa   = std::cos(radangle);
+    sina   = std::sin(radangle);
     OMcosa = 1.0 - cosa;
     dumxy  = rot_vec[XX] * rot_vec[YY] * OMcosa;
     dumxz  = rot_vec[XX] * rot_vec[ZZ] * OMcosa;
@@ -1304,12 +1317,12 @@ static void swap_col(double** mat, int i, int j)
 
 
 /* Eigenvectors are stored in columns of eigen_vec */
-static void diagonalize_symmetric(double** matrix, double** eigen_vec, double eigenval[3])
+static void diagonalize_symmetric(double** mat, double** eigen_vec, double eigenval[3])
 {
     int n_rot;
 
 
-    jacobi(matrix, 3, eigenval, eigen_vec, &n_rot);
+    jacobi(mat, 3, eigenval, eigen_vec, &n_rot);
 
     /* sort in ascending order */
     if (eigenval[0] > eigenval[1])
@@ -1351,7 +1364,7 @@ static void align_with_z(rvec* s, /* Structure to align */
 
     /* Calculate the angle for the fitting procedure */
     cprod(axis, zet, rot_axis);
-    angle = acos(axis[2]);
+    angle = std::acos(axis[2]);
     if (angle < 0.0)
     {
         angle += M_PI;
@@ -1577,7 +1590,7 @@ static real opt_angle_analytic(rvec*      ref_s,
     }
 
     /* Determine the optimal rotation angle: */
-    opt_angle = (-1.0) * acos(rot_matrix[0][0]) * 180.0 / M_PI;
+    opt_angle = (-1.0) * std::acos(rot_matrix[0][0]) * 180.0 / M_PI;
     if (rot_matrix[0][1] < 0.0)
     {
         opt_angle = (-1.0) * opt_angle;
@@ -2046,7 +2059,7 @@ static real do_flex2_lowlevel(gmx_enfrotgrp*                 erg,
     const auto& localRotationGroupIndex      = erg->atomSet->localIndex();
     const auto& collectiveRotationGroupIndex = erg->atomSet->collectiveIndex();
 
-    for (gmx::index j = 0; j < localRotationGroupIndex.ssize(); j++)
+    for (gmx::Index j = 0; j < localRotationGroupIndex.ssize(); j++)
     {
         /* Local index of a rotation group atom  */
         ii = localRotationGroupIndex[j];
@@ -2305,7 +2318,7 @@ static real do_flex_lowlevel(gmx_enfrotgrp* erg,
     const auto& localRotationGroupIndex      = erg->atomSet->localIndex();
     const auto& collectiveRotationGroupIndex = erg->atomSet->collectiveIndex();
 
-    for (gmx::index j = 0; j < localRotationGroupIndex.ssize(); j++)
+    for (gmx::Index j = 0; j < localRotationGroupIndex.ssize(); j++)
     {
         /* Local index of a rotation group atom  */
         int ii = localRotationGroupIndex[j];
@@ -2551,7 +2564,7 @@ static inline int get_first_slab(const gmx_enfrotgrp* erg,
                                  const gmx::RVec& firstatom) /* First atom after sorting along the rotation vector v */
 {
     /* Find the first slab for the first atom */
-    return static_cast<int>(ceil(
+    return static_cast<int>(std::ceil(
             static_cast<double>((iprod(firstatom, erg->vec) - erg->max_beta) / erg->rotg->slab_dist)));
 }
 
@@ -2559,7 +2572,7 @@ static inline int get_first_slab(const gmx_enfrotgrp* erg,
 static inline int get_last_slab(const gmx_enfrotgrp* erg, const gmx::RVec& lastatom) /* Last atom along v */
 {
     /* Find the last slab for the last atom */
-    return static_cast<int>(floor(
+    return static_cast<int>(std::floor(
             static_cast<double>((iprod(lastatom, erg->vec) + erg->max_beta) / erg->rotg->slab_dist)));
 }
 
@@ -2995,7 +3008,7 @@ static void do_radial_motion_pf(gmx_enfrotgrp*                 erg,
     /* Each process calculates the forces on its local atoms */
     const auto& localRotationGroupIndex      = erg->atomSet->localIndex();
     const auto& collectiveRotationGroupIndex = erg->atomSet->collectiveIndex();
-    for (gmx::index j = 0; j < localRotationGroupIndex.ssize(); j++)
+    for (gmx::Index j = 0; j < localRotationGroupIndex.ssize(); j++)
     {
         /* Local index of a rotation group atom  */
         int ii = localRotationGroupIndex[j];
@@ -3184,7 +3197,7 @@ static void do_radial_motion2(gmx_enfrotgrp*                 erg,
     /* Each process calculates the forces on its local atoms */
     const auto& localRotationGroupIndex      = erg->atomSet->localIndex();
     const auto& collectiveRotationGroupIndex = erg->atomSet->collectiveIndex();
-    for (gmx::index j = 0; j < localRotationGroupIndex.ssize(); j++)
+    for (gmx::Index j = 0; j < localRotationGroupIndex.ssize(); j++)
     {
         if (bPF)
         {
@@ -3692,8 +3705,7 @@ std::unique_ptr<gmx::EnforcedRotation> init_rot(FILE*                       fplo
                                                 const gmx::MdrunOptions&    mdrunOptions,
                                                 const gmx::StartingBehavior startingBehavior)
 {
-    int   nat_max = 0;       /* Size of biggest rotation group */
-    rvec* x_pbc   = nullptr; /* Space for the pbc-correct atom positions */
+    int nat_max = 0; /* Size of biggest rotation group */
 
     if (MAIN(cr) && mdrunOptions.verbose)
     {
@@ -3707,7 +3719,7 @@ std::unique_ptr<gmx::EnforcedRotation> init_rot(FILE*                       fplo
     er->restartWithAppending = (startingBehavior == gmx::StartingBehavior::RestartWithAppending);
 
     /* When appending, skip first output to avoid duplicate entries in the data files */
-    er->bOut = er->restartWithAppending;
+    er->bOut = !er->restartWithAppending;
 
     if (MAIN(cr) && er->bOut)
     {
@@ -3736,13 +3748,16 @@ std::unique_ptr<gmx::EnforcedRotation> init_rot(FILE*                       fplo
         er->out_slabs = open_slab_out(opt2fn("-rs", nfile, fnm), er);
     }
 
+    /* Space for the pbc-correct atom positions */
+    std::vector<gmx::RVec> x_pbc;
+
     if (MAIN(cr))
     {
         /* Remove pbc, make molecule whole.
          * When ir->bContinuation=TRUE this has already been done, but ok. */
-        snew(x_pbc, mtop.natoms);
-        copy_rvecn(globalState->x.rvec_array(), x_pbc, 0, mtop.natoms);
-        do_pbc_first_mtop(nullptr, ir->pbcType, globalState->box, &mtop, x_pbc);
+        x_pbc.resize(mtop.natoms);
+        std::copy(globalState->x.begin(), globalState->x.end(), x_pbc.begin());
+        do_pbc_first_mtop(nullptr, ir->pbcType, false, nullptr, globalState->box, &mtop, x_pbc, {});
         /* All molecules will be whole now, but not necessarily in the home box.
          * Additionally, if a rotation group consists of more than one molecule
          * (e.g. two strands of DNA), each one of them can end up in a different
@@ -3776,7 +3791,7 @@ std::unique_ptr<gmx::EnforcedRotation> init_rot(FILE*                       fplo
             init_rot_group(fplog,
                            cr,
                            erg,
-                           x_pbc,
+                           as_rvec_array(x_pbc.data()),
                            mtop,
                            mdrunOptions.verbose,
                            er->out_slabs,
@@ -3827,8 +3842,6 @@ std::unique_ptr<gmx::EnforcedRotation> init_rot(FILE*                       fplo
                 er->out_torque = open_torque_out(opt2fn("-rt", nfile, fnm), er);
             }
         }
-
-        sfree(x_pbc);
     }
     return enforcedRotation;
 }
@@ -3858,7 +3871,7 @@ static void rotate_local_reference(gmx_enfrotgrp* erg)
 static void choose_pbc_image(gmx::ArrayRef<const gmx::RVec> coords, gmx_enfrotgrp* erg, const matrix box, int npbcdim)
 {
     const auto& localRotationGroupIndex = erg->atomSet->localIndex();
-    for (gmx::index i = 0; i < localRotationGroupIndex.ssize(); i++)
+    for (gmx::Index i = 0; i < localRotationGroupIndex.ssize(); i++)
     {
         /* Index of a rotation group atom  */
         int ii = localRotationGroupIndex[i];
@@ -3947,7 +3960,7 @@ void do_rotation(const t_commrec*               cr,
             if (bNS)
             {
                 const auto& collectiveRotationGroupIndex = erg->atomSet->collectiveIndex();
-                for (gmx::index i = 0; i < collectiveRotationGroupIndex.ssize(); i++)
+                for (gmx::Index i = 0; i < collectiveRotationGroupIndex.ssize(); i++)
                 {
                     /* Index of local atom w.r.t. the collective rotation group */
                     int ii        = collectiveRotationGroupIndex[i];
@@ -4052,7 +4065,11 @@ void do_rotation(const t_commrec*               cr,
 #ifdef TAKETIME
     if (MAIN(cr))
     {
-        fprintf(stderr, "%s calculation (step %d) took %g seconds.\n", RotStr, step, MPI_Wtime() - t0);
+        fprintf(stderr,
+                "%s calculation (step %" PRId64 ") took %g seconds.\n",
+                RotStr.c_str(),
+                step,
+                MPI_Wtime() - t0);
     }
 #endif
 }

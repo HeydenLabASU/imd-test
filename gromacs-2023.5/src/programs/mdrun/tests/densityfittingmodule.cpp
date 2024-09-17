@@ -41,15 +41,19 @@
  */
 #include "gmxpre.h"
 
+#include <filesystem>
 #include <string>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "gromacs/topology/ifunc.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/stringutil.h"
 
+#include "testutils/cmdlinetest.h"
 #include "testutils/refdata.h"
+#include "testutils/testasserts.h"
 #include "testutils/testfilemanager.h"
 
 #include "energycomparison.h"
@@ -74,7 +78,7 @@ public:
     DensityFittingTest()
     {
         runner_.useTopGroAndNdxFromDatabase("argon12");
-        runner_.edrFileName_ = fileManager_.getTemporaryFilePath(".edr").u8string();
+        runner_.edrFileName_ = fileManager_.getTemporaryFilePath(".edr").string();
     }
 
     //! Check the output of mdrun
@@ -101,7 +105,7 @@ public:
             "density-guided-simulation-active = yes\n"
             "density-guided-simulation-group  = FirstThreeOfTwelve\n"
             "density-guided-simulation-reference-density-filename = %s\n",
-            TestFileManager::getInputFilePath("ellipsoid-density.mrc").u8string().c_str());
+            TestFileManager::getInputFilePath("ellipsoid-density.mrc").string().c_str());
 
     //! Mdp values for md integrator with default density fitting parameters.
     const std::string mdpMdDensfitYesUnsetValues = formatString(
@@ -111,7 +115,7 @@ public:
             "density-guided-simulation-active = yes\n"
             "density-guided-simulation-group  = FirstThreeOfTwelve\n"
             "density-guided-simulation-reference-density-filename = %s\n",
-            TestFileManager::getInputFilePath("ellipsoid-density.mrc").u8string().c_str());
+            TestFileManager::getInputFilePath("ellipsoid-density.mrc").string().c_str());
 
     //! Mdp values for steepest-decent energy minimization with density fitting values set to non-defaults.
     const std::string mdpDensiftAllDefaultsChanged_ = formatString(

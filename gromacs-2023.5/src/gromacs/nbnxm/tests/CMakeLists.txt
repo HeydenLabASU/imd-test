@@ -33,6 +33,17 @@
 
 gmx_add_unit_test(NbnxmTests nbnxm-test
     CPP_SOURCE_FILES
+        exclusions.cpp
+        kernel_test.cpp
         kernelsetup.cpp
+        simd_energy_accumulator.cpp
+        testsystem.cpp
         )
-target_link_libraries(nbnxm-test PRIVATE nbnxm)
+target_link_libraries(nbnxm-test PRIVATE nbnxm pbcutil simd timing)
+
+gmx_add_unit_test(NbnxmGpuTests nbnxm-gpu-test
+    HARDWARE_DETECTION
+    GPU_CPP_SOURCE_FILES
+        pairlist.cpp
+        )
+target_link_libraries(nbnxm-gpu-test PRIVATE nbnxm gpu_utils timing)

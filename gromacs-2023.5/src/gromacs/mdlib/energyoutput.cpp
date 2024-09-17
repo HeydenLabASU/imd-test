@@ -45,16 +45,20 @@
 #include "energyoutput.h"
 
 #include <cfloat>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
+#include <algorithm>
 #include <array>
+#include <filesystem>
 #include <string>
 
 #include "gromacs/applied_forces/awh/awh.h"
 #include "gromacs/applied_forces/awh/read_params.h"
 #include "gromacs/fileio/enxio.h"
 #include "gromacs/fileio/gmxfio.h"
+#include "gromacs/fileio/xdr_datatype.h"
 #include "gromacs/fileio/xvgr.h"
 #include "gromacs/gmxlib/network.h"
 #include "gromacs/listed_forces/disre.h"
@@ -75,12 +79,17 @@
 #include "gromacs/mdtypes/state.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/pulling/pull.h"
+#include "gromacs/topology/forcefieldparameters.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/topology/topology_enums.h"
 #include "gromacs/trajectory/energyframe.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/stringutil.h"
 
@@ -609,9 +618,9 @@ static void print_lambda_vector(t_lambda* fep, int i, bool get_native_lambda, bo
         {
             if (!get_names)
             {
-                if (get_native_lambda && fep->init_lambda >= 0)
+                if (get_native_lambda && fep->init_lambda_without_states >= 0)
                 {
-                    str += sprintf(str, "%.4f", fep->init_lambda);
+                    str += sprintf(str, "%.4f", fep->init_lambda_without_states);
                 }
                 else
                 {
@@ -687,10 +696,10 @@ FILE* open_dhdl(const char* filename, const t_inputrec* ir, const gmx_output_env
         && (ir->efep != FreeEnergyPerturbationType::Expanded)
         && !(ir->bDoAwh && awhHasFepLambdaDimension(*ir->awhParams)))
     {
-        if ((fep->init_lambda >= 0) && (n_lambda_terms == 1))
+        if ((fep->init_lambda_without_states >= 0) && (n_lambda_terms == 1))
         {
             /* compatibility output */
-            buf += gmx::formatString("%s = %.4f", lambda, fep->init_lambda);
+            buf += gmx::formatString("%s = %.4f", lambda, fep->init_lambda_without_states);
         }
         else
         {
@@ -725,7 +734,7 @@ FILE* open_dhdl(const char* filename, const t_inputrec* ir, const gmx_output_env
 
     nsetsextend = nsets;
     if ((ir->pressureCouplingOptions.epc != PressureCoupling::No) && (fep->n_lambda > 0)
-        && (fep->init_lambda < 0))
+        && (fep->init_lambda_without_states < 0))
     {
         nsetsextend += 1; /* for PV term, other terms possible if required for
                              the reduced potential (only needed with foreign
@@ -764,18 +773,16 @@ FILE* open_dhdl(const char* filename, const t_inputrec* ir, const gmx_output_env
             if (fep->separate_dvdl[i])
             {
                 std::string derivative;
-                if ((fep->init_lambda >= 0) && (n_lambda_terms == 1))
+                if ((fep->init_lambda_without_states >= 0) && (n_lambda_terms == 1))
                 {
                     /* compatibility output */
-                    derivative = gmx::formatString("%s %s %.4f", dhdl, lambda, fep->init_lambda);
+                    derivative = gmx::formatString(
+                            "%s %s %.4f", dhdl, lambda, fep->init_lambda_without_states);
                 }
                 else
                 {
-                    double lam = fep->init_lambda;
-                    if (fep->init_lambda < 0)
-                    {
-                        lam = fep->all_lambda[i][fep->init_fep_state];
-                    }
+                    const double lam = fep->initialLambda(i);
+
                     derivative = gmx::formatString("%s %s = %.4f", dhdl, enumValueToStringSingular(i), lam);
                 }
                 setname[s++] = derivative;
@@ -808,7 +815,7 @@ FILE* open_dhdl(const char* filename, const t_inputrec* ir, const gmx_output_env
         {
             print_lambda_vector(fep, i, false, false, lambda_vec_str);
             std::string buf;
-            if ((fep->init_lambda >= 0) && (n_lambda_terms == 1))
+            if ((fep->init_lambda_without_states >= 0) && (n_lambda_terms == 1))
             {
                 /* for compatible dhdl.xvg files */
                 buf = gmx::formatString("%s %s %s", deltag, lambda, lambda_vec_str);
@@ -1091,7 +1098,7 @@ void EnergyOutput::addDataAtEnergyStep(bool                    bDoDHDL,
                 fprintf(fp_dhdl_, " %#.8g", dE_[i]);
             }
             if (bDynBox_ && bDiagPres_ && (epc_ != PressureCoupling::No)
-                && foreignTerms.numLambdas() > 0 && (fep->init_lambda < 0))
+                && foreignTerms.numLambdas() > 0 && fep->init_lambda_without_states < 0)
             {
                 fprintf(fp_dhdl_, " %#.8g", pv); /* PV term only needed when
                                                          there are alternate state
@@ -1101,7 +1108,7 @@ void EnergyOutput::addDataAtEnergyStep(bool                    bDoDHDL,
             fprintf(fp_dhdl_, "\n");
             /* and the binary free energy output */
         }
-        if (dhc_ && bDoDHDL)
+        if (dhc_)
         {
             int idhdl = 0;
             for (auto i : keysOf(fep->separate_dvdl))
@@ -1193,7 +1200,7 @@ void EnergyOutput::printStepToEnergyFile(ener_file* fp_ene,
                                 : 0;
         block[enxORI] = orires.orientations.data();
         id[enxORI]    = enxORI;
-        nr[enxORT]    = ssize(orires.eigenOutput);
+        nr[enxORT]    = gmx::ssize(orires.eigenOutput);
         block[enxORT] = orires.eigenOutput.data();
         id[enxORT]    = enxORT;
     }

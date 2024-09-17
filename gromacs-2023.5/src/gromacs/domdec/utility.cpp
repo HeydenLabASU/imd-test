@@ -43,6 +43,8 @@
 
 #include "utility.h"
 
+#include <filesystem>
+
 #include "gromacs/mdtypes/forcerec.h"
 #include "gromacs/mdtypes/state.h"
 #include "gromacs/utility/fatalerror.h"
@@ -107,5 +109,5 @@ void dd_resize_atominfo_and_state(t_forcerec* fr, t_state* state, const int numA
     fr->atomInfo.resize(numAtoms);
 
     /* We use x during the setup of the atom communication */
-    state_change_natoms(state, numAtoms);
+    state->changeNumAtoms(numAtoms);
 }

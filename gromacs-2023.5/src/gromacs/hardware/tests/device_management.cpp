@@ -44,14 +44,24 @@
 
 #include "config.h"
 
+#include <cstdint>
+
 #include <algorithm>
+#include <memory>
+#include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "gromacs/hardware/device_information.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/inmemoryserializer.h"
 #include "gromacs/utility/stringutil.h"
 
+namespace gmx
+{
+namespace test
+{
 namespace
 {
 
@@ -98,4 +108,96 @@ TEST(DevicesManagerTest, Serialization)
     }
 }
 
+template<std::size_t N>
+uint32_t uint32FromBytes(const std::array<std::byte, N>& data, const std::size_t byteOffset)
+{
+    if (byteOffset + sizeof(uint32_t) > N)
+    {
+        throw std::invalid_argument("byteOffset would read out of bounds");
+    }
+
+    // Integer to copy the bytes to
+    uint32_t result;
+
+    // Copy the bytes, assuming little-endian layout. The compiler
+    // generally elides this away.
+    std::memcpy(&result, &(data[byteOffset]), sizeof(result));
+    if (GMX_INTEGER_BIG_ENDIAN)
+    {
+        // Change the endianness to match the hardware
+        const auto* ptr = reinterpret_cast<const uint8_t*>(&result);
+        return (ptr[0] << 24) | (ptr[1] << 16) | (ptr[2] << 8) | ptr[3];
+    }
+    else
+    {
+        return result;
+    }
+}
+
+std::string uuidToString(const std::array<std::byte, 16>& uuid)
+{
+    // Write a string in the frequently used 8-4-4-4-12 format,
+    // xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx, where every x represents 4 bits
+    std::string result;
+    result.reserve(37);
+
+    std::size_t byteOffset = 0;
+    for (int i = 0; i < 4; ++i, byteOffset += sizeof(uint32_t))
+    {
+        result += gmx::formatString("%2.2x", uint32FromBytes(uuid, byteOffset));
+    }
+    result.append(1, '-');
+    for (int i = 0; i < 2; ++i, byteOffset += sizeof(uint32_t))
+    {
+        result += gmx::formatString("%2.2x", uint32FromBytes(uuid, byteOffset));
+    }
+    result.append(1, '-');
+    for (int i = 0; i < 2; ++i, byteOffset += sizeof(uint32_t))
+    {
+        result += gmx::formatString("%2.2x", uint32FromBytes(uuid, byteOffset));
+    }
+    result.append(1, '-');
+    for (int i = 0; i < 2; ++i, byteOffset += sizeof(uint32_t))
+    {
+        result += gmx::formatString("%2.2x", uint32FromBytes(uuid, byteOffset));
+    }
+    result.append(1, '-');
+    for (int i = 0; i < 6; ++i, byteOffset += sizeof(uint32_t))
+    {
+        result += gmx::formatString("%2.2x", uint32FromBytes(uuid, byteOffset));
+    }
+    return result;
+}
+
+// We can't actually test UUID detection because the value returned
+// will be different on each piece of hardware. This test case is a
+// service to GROMACS developers to permit them to check manually that
+// UUID detection is working on a platform. When the UUID can be
+// detected, this test will still fail, but in doing so it will print
+// out the UUID, which can then be compared with the output of another
+// tool.
+//
+// Run it with
+// "hardware-test --gtest_also_run_disabled_tests --gtest_filter=DevicesManagerTest.DISABLED_DetectsUuid"
+// and compare the resulting strings. They should match.
+TEST(DevicesManagerTest, DISABLED_DetectsUuid)
+{
+    if (canPerformDeviceDetection(nullptr))
+    {
+        std::vector<std::unique_ptr<DeviceInformation>> deviceInfoList = findDevices();
+        for (int deviceId = 0; deviceId < static_cast<int>(deviceInfoList.size()); deviceId++)
+        {
+            SCOPED_TRACE(gmx::formatString("Testing device with ID %d", deviceId));
+            ASSERT_TRUE(deviceInfoList[deviceId].get()) << "Invalid handle to DeviceInfo";
+            const auto uuid = uuidForDevice(*deviceInfoList[deviceId].get());
+            ASSERT_TRUE(uuid.has_value());
+            SCOPED_TRACE("Device had UUID " + uuidToString(uuid.value()));
+            // Force GoogleTest to print out the messages
+            ADD_FAILURE();
+        }
+    }
+}
+
 } // namespace
+} // namespace test
+} // namespace gmx

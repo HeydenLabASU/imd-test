@@ -44,7 +44,19 @@
 
 #include "config.h"
 
+#include <cstdint>
+
+#include "gromacs/gpu_utils/devicebuffer_datatype.h"
+#include "gromacs/math/vectypes.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/gmxassert.h"
+
 #include "gpuforcereduction.h"
+
+class DeviceContext;
+class DeviceStream;
+class GpuEventSynchronizer;
+struct gmx_wallcycle;
 
 #if !HAVE_GPU_FORCE_REDUCTION
 
@@ -82,6 +94,12 @@ void GpuForceReduction::registerNbnxmForce(DeviceBuffer<RVec> /* forcePtr */)
 
 // NOLINTNEXTLINE readability-convert-member-functions-to-static
 void GpuForceReduction::registerRvecForce(DeviceBuffer<gmx::RVec> /* forcePtr */)
+{
+    GMX_RELEASE_ASSERT(false, "A CPU stub has been called instead of the correct implementation.");
+}
+
+// NOLINTNEXTLINE readability-convert-member-functions-to-static
+void GpuForceReduction::registerForcesReadyNvshmemFlags(DeviceBuffer<uint64_t> /* forceSyncObjPtr */)
 {
     GMX_RELEASE_ASSERT(false, "A CPU stub has been called instead of the correct implementation.");
 }

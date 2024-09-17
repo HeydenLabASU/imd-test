@@ -45,6 +45,8 @@
 
 #include <gtest/gtest.h>
 
+#include "gromacs/utility/basedefinitions.h"
+
 #include "constrtestrunners.h"
 
 #if GPU_CONSTRAINTS_SUPPORTED
@@ -58,14 +60,15 @@ namespace gmx
 {
 namespace test
 {
+class ConstraintsTestData;
 
 #if GPU_CONSTRAINTS_SUPPORTED
 
 void LincsDeviceConstraintsRunner::applyConstraints(ConstraintsTestData* testData, t_pbc pbc)
 {
-    testDevice_.activate();
     const DeviceContext& deviceContext = testDevice_.deviceContext();
     const DeviceStream&  deviceStream  = testDevice_.deviceStream();
+    deviceContext.activate();
 
     auto lincsGpu = std::make_unique<LincsGpu>(
             testData->ir_.nLincsIter, testData->ir_.nProjOrder, deviceContext, deviceStream);

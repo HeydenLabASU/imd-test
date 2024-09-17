@@ -45,9 +45,12 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include <filesystem>
 #include <memory>
+#include <string>
 
 #include <gmock/gmock.h>
+#include <gtest/gtest.h>
 
 #include "gromacs/commandline/cmdlinehelpcontext.h"
 #include "gromacs/commandline/cmdlinehelpwriter.h"
@@ -55,6 +58,7 @@
 #include "gromacs/commandline/cmdlineparser.h"
 #include "gromacs/commandline/cmdlineprogramcontext.h"
 #include "gromacs/math/utilities.h"
+#include "gromacs/onlinehelp/helpwritercontext.h"
 #include "gromacs/options/basicoptions.h"
 #include "gromacs/options/options.h"
 #include "gromacs/utility/basenetwork.h"
@@ -191,7 +195,7 @@ void initTestUtils(const std::filesystem::path& dataPath,
             {
                 fprintf(stderr,
                         "NOTE: You are running %s on %d MPI ranks, "
-                        "but it is does not contain MPI-enabled tests. "
+                        "but it does not contain MPI-enabled tests. "
                         "The test will now exit.\n",
                         context.programName(),
                         gmx_node_num());

@@ -43,8 +43,12 @@
 #ifndef GMX_MDLIB_SETTLE_H
 #define GMX_MDLIB_SETTLE_H
 
+#include <vector>
+
+#include "gromacs/math/vectypes.h"
 #include "gromacs/topology/idef.h"
 #include "gromacs/utility/alignedallocator.h"
+#include "gromacs/utility/real.h"
 
 struct gmx_mtop_t;
 struct InteractionList;
@@ -108,7 +112,7 @@ struct SettleParameters
  * \param[in]  dOH    Target O-H bond length
  * \param[in]  dHH    Target H-H bond length
  */
-SettleParameters settleParameters(real mO, real mH, real dOH, real invmO, real invmH, real dHH);
+SettleParameters settleParameters(real mO, real mH, real invmO, real invmH, real dOH, real dHH);
 
 /*! \libinternal
  * \brief Data for executing SETTLE constraining

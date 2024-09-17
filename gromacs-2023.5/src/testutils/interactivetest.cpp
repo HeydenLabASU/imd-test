@@ -42,6 +42,7 @@
 
 #include "testutils/interactivetest.h"
 
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -49,6 +50,7 @@
 #include <gtest/gtest.h>
 
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/stringutil.h"
 #include "gromacs/utility/textstream.h"
 
@@ -97,11 +99,11 @@ public:
     {
         checkOutput();
         line->clear();
-        const bool bPresent = (currentLine_ < index(inputLines_.size()));
+        const bool bPresent = (currentLine_ < Index(inputLines_.size()));
         if (bPresent)
         {
             line->assign(inputLines_[currentLine_]);
-            if (bLastNewline_ || currentLine_ + 1 < index(inputLines_.size()))
+            if (bLastNewline_ || currentLine_ + 1 < Index(inputLines_.size()))
             {
                 line->append("\n");
             }
@@ -131,7 +133,7 @@ public:
     TestReferenceChecker        checker_;
     ArrayRef<const char* const> inputLines_;
     bool                        bLastNewline_;
-    index                       currentLine_;
+    Index                       currentLine_;
     bool                        bHasOutput_;
     std::string                 currentOutput_;
     MockTextInputStream         inputStream_;

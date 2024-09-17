@@ -62,8 +62,7 @@ gmx_target_interface_warning_suppression(fileio "-Wno-cast-function-type-strict"
 
 # Public interface for modules, including dependencies and interfaces
 #target_include_directories(fileio PUBLIC
-target_include_directories(fileio INTERFACE
-                           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+#                           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 #target_link_libraries(fileio PUBLIC
 target_link_libraries(fileio INTERFACE
                       legacy_api
@@ -80,6 +79,13 @@ target_link_libraries(fileio INTERFACE
 target_link_libraries(fileio INTERFACE
                       utility
                       )
+
+gmx_manage_hdf5()
+
+if(GMX_USE_HDF5)
+    target_include_directories(fileio SYSTEM INTERFACE ${HDF5_INCLUDE_DIRS})
+    target_link_libraries(fileio INTERFACE ${HDF5_LIBRARIES})
+endif()
 # Source files have the following private module dependencies.
 #target_link_libraries(fileio PRIVATE tng_io)
 # TODO: Explicitly link specific modules.

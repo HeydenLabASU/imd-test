@@ -43,10 +43,16 @@
 #include "constr.h"
 
 #include <cassert>
+#include <cinttypes>
+#include <climits>
 #include <cmath>
 #include <cstdlib>
 
 #include <algorithm>
+#include <array>
+#include <filesystem>
+#include <string>
+#include <utility>
 
 #include "gromacs/domdec/domdec.h"
 #include "gromacs/domdec/domdec_struct.h"
@@ -56,6 +62,7 @@
 #include "gromacs/fileio/pdbio.h"
 #include "gromacs/gmxlib/nrnb.h"
 #include "gromacs/math/arrayrefwithpadding.h"
+#include "gromacs/math/paddedvector.h"
 #include "gromacs/math/utilities.h"
 #include "gromacs/math/vec.h"
 #include "gromacs/mdlib/gmx_omp_nthreads.h"
@@ -69,19 +76,27 @@
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/pulling/pull.h"
 #include "gromacs/timing/wallcycle.h"
+#include "gromacs/topology/forcefieldparameters.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/mtop_lookup.h"
 #include "gromacs/topology/mtop_util.h"
+#include "gromacs/topology/topology.h"
+#include "gromacs/topology/topology_enums.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/cstringutil.h"
+#include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/listoflists.h"
 #include "gromacs/utility/pleasecite.h"
+#include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/txtdump.h"
 
 namespace gmx
 {
+class Lincs;
 
 /* \brief Impl class for Constraints
  *
@@ -117,8 +132,7 @@ public:
                         bool                                hasMassPerturbedAtoms,
                         real                                lambda,
                         gmx::ArrayRef<const unsigned short> cFREEZE);
-    bool apply(bool                      bLog,
-               bool                      bEner,
+    bool apply(bool                      computeRmsd,
                int64_t                   step,
                int                       delta_step,
                real                      step_scaling,
@@ -188,7 +202,7 @@ public:
     //! Multi-sim support.
     const gmx_multisim_t* ms = nullptr;
     //! Pulling code object, if any.
-    pull_t* pull_work = nullptr;
+    pull_t* pullWork_ = nullptr;
     /*!\brief Input options.
      *
      * \todo Replace with IMdpOptions */
@@ -354,8 +368,7 @@ static void dump_confs(FILE*                log,
     fprintf(stderr, "Wrote pdb files with previous and current coordinates\n");
 }
 
-bool Constraints::apply(bool                      bLog,
-                        bool                      bEner,
+bool Constraints::apply(bool                      computeRmsd,
                         int64_t                   step,
                         int                       delta_step,
                         real                      step_scaling,
@@ -370,8 +383,7 @@ bool Constraints::apply(bool                      bLog,
                         tensor                    constraintsVirial,
                         ConstraintVariable        econq)
 {
-    return impl_->apply(bLog,
-                        bEner,
+    return impl_->apply(computeRmsd,
                         step,
                         delta_step,
                         step_scaling,
@@ -387,8 +399,7 @@ bool Constraints::apply(bool                      bLog,
                         econq);
 }
 
-bool Constraints::Impl::apply(bool                      bLog,
-                              bool                      bEner,
+bool Constraints::Impl::apply(const bool                computeRmsd,
                               int64_t                   step,
                               int                       delta_step,
                               real                      step_scaling,
@@ -477,7 +488,7 @@ bool Constraints::Impl::apply(bool                      bLog,
          * so that here we can use normal pbc.
          */
         pbc_null = set_pbc_dd(
-                &pbc, ir.pbcType, haveDDAtomOrdering(*cr) ? cr->dd->numCells : nullptr, FALSE, box);
+                &pbc, ir.pbcType, haveDDAtomOrdering(*cr) ? &cr->dd->numCells : nullptr, FALSE, box);
     }
     else
     {
@@ -509,7 +520,7 @@ bool Constraints::Impl::apply(bool                      bLog,
 
     if (lincsd != nullptr)
     {
-        bOK = constrain_lincs(bLog || bEner,
+        bOK = constrain_lincs(computeRmsd,
                               ir,
                               step,
                               lincsd,
@@ -755,7 +766,7 @@ bool Constraints::Impl::apply(bool                      bLog,
 
     if (econq == ConstraintVariable::Positions)
     {
-        if (ir.bPull && pull_have_constraint(*pull_work))
+        if (ir.bPull && pull_have_constraint(*pullWork_))
         {
             if (EI_DYNAMICS(ir.eI))
             {
@@ -766,7 +777,7 @@ bool Constraints::Impl::apply(bool                      bLog,
                 t = ir.init_t;
             }
             set_pbc(&pbc, ir.pbcType, box);
-            pull_constraint(pull_work,
+            pull_constraint(pullWork_,
                             masses_,
                             pbc,
                             cr,
@@ -1101,7 +1112,7 @@ Constraints::Impl::Impl(const gmx_mtop_t&          mtop_p,
     log(log_p),
     cr(cr_p),
     ms(ms_p),
-    pull_work(pull_work),
+    pullWork_(pull_work),
     ir(ir_p),
     nrnb(nrnb_p),
     wcycle(wcycle_p)
@@ -1266,62 +1277,42 @@ ArrayRef<const std::vector<int>> Constraints::atom2settle_moltype() const
 
 void do_constrain_first(FILE*                     fplog,
                         gmx::Constraints*         constr,
-                        const t_inputrec*         ir,
-                        int                       numAtoms,
-                        int                       numHomeAtoms,
+                        const t_inputrec&         ir,
+                        const int                 numAtoms,
+                        const int                 numHomeAtoms,
                         ArrayRefWithPadding<RVec> x,
                         ArrayRefWithPadding<RVec> v,
                         const matrix              box,
-                        real                      lambda)
+                        const real                lambda)
 {
-    int     i, m, start, end;
-    int64_t step;
-    real    dt = ir->delta_t;
-    real    dvdl_dum;
-
     PaddedVector<RVec> savex(numAtoms);
 
-    start = 0;
-    end   = numHomeAtoms;
+    const int start = 0;
+    const int end   = numHomeAtoms;
 
     if (debug)
     {
         fprintf(debug, "vcm: start=%d, homenr=%d, end=%d\n", start, numHomeAtoms, end);
     }
     /* Do a first constrain to reset particles... */
-    step = ir->init_step;
+    const int64_t step = ir.init_step;
     if (fplog)
     {
         char buf[STEPSTRSIZE];
         fprintf(fplog, "\nConstraining the starting coordinates (step %s)\n", gmx_step_str(step, buf));
     }
-    dvdl_dum = 0;
+    real dvdl_dum = 0;
 
-    bool needsLogging  = true;
-    bool computeEnergy = false;
-    bool computeVirial = false;
+    const bool computeRmsd   = true;
+    const bool computeVirial = false;
     /* constrain the current position */
-    constr->apply(needsLogging,
-                  computeEnergy,
-                  step,
-                  0,
-                  1.0,
-                  x,
-                  x,
-                  {},
-                  box,
-                  lambda,
-                  &dvdl_dum,
-                  {},
-                  computeVirial,
-                  nullptr,
-                  gmx::ConstraintVariable::Positions);
-    if (EI_VV(ir->eI))
+    constr->apply(
+            computeRmsd, step, 0, 1.0, x, x, {}, box, lambda, &dvdl_dum, {}, computeVirial, nullptr, gmx::ConstraintVariable::Positions);
+    if (EI_VV(ir.eI))
     {
         /* constrain the inital velocity, and save it */
         /* also may be useful if we need the ekin from the halfstep for velocity verlet */
-        constr->apply(needsLogging,
-                      computeEnergy,
+        constr->apply(computeRmsd,
                       step,
                       0,
                       1.0,
@@ -1337,19 +1328,18 @@ void do_constrain_first(FILE*                     fplog,
                       gmx::ConstraintVariable::Velocities);
     }
     /* constrain the inital velocities at t-dt/2 */
-    if (EI_STATE_VELOCITY(ir->eI) && ir->eI != IntegrationAlgorithm::VV)
+    if (EI_STATE_VELOCITY(ir.eI) && ir.eI != IntegrationAlgorithm::VV)
     {
+        const real dt = ir.delta_t;
+
         auto subX = x.paddedArrayRef().subArray(start, end);
         auto subV = v.paddedArrayRef().subArray(start, end);
-        for (i = start; (i < end); i++)
+        for (int i = start; i < end; i++)
         {
-            for (m = 0; (m < DIM); m++)
-            {
-                /* Reverse the velocity */
-                subV[i][m] = -subV[i][m];
-                /* Store the position at t-dt in buf */
-                savex[i][m] = subX[i][m] + dt * subV[i][m];
-            }
+            /* Reverse the velocity */
+            subV[i] = -subV[i];
+            /* Store the position at t-dt in buf */
+            savex[i] = subX[i] + dt * subV[i];
         }
         /* Shake the positions at t=-dt with the positions at t=0
          * as reference coordinates.
@@ -1360,8 +1350,7 @@ void do_constrain_first(FILE*                     fplog,
             fprintf(fplog, "\nConstraining the coordinates at t0-dt (step %s)\n", gmx_step_str(step, buf));
         }
         dvdl_dum = 0;
-        constr->apply(needsLogging,
-                      computeEnergy,
+        constr->apply(computeRmsd,
                       step,
                       -1,
                       1.0,
@@ -1376,30 +1365,25 @@ void do_constrain_first(FILE*                     fplog,
                       nullptr,
                       gmx::ConstraintVariable::Positions);
 
-        for (i = start; i < end; i++)
+        for (int i = start; i < end; i++)
         {
-            for (m = 0; m < DIM; m++)
-            {
-                /* Re-reverse the velocities */
-                subV[i][m] = -subV[i][m];
-            }
+            /* Re-reverse the velocities */
+            subV[i] = -subV[i];
         }
     }
 }
 
 void constrain_velocities(gmx::Constraints* constr,
-                          bool              do_log,
-                          bool              do_ene,
+                          bool              computeRmsd,
                           int64_t           step,
                           t_state*          state,
                           real*             dvdlambda,
-                          gmx_bool          computeVirial,
+                          bool              computeVirial,
                           tensor            constraintsVirial)
 {
     if (constr != nullptr)
     {
-        constr->apply(do_log,
-                      do_ene,
+        constr->apply(computeRmsd,
                       step,
                       1,
                       1.0,
@@ -1417,19 +1401,17 @@ void constrain_velocities(gmx::Constraints* constr,
 }
 
 void constrain_coordinates(gmx::Constraints*         constr,
-                           bool                      do_log,
-                           bool                      do_ene,
+                           bool                      computeRmsd,
                            int64_t                   step,
                            t_state*                  state,
                            ArrayRefWithPadding<RVec> xp,
-                           real*                     dvdlambda,
-                           gmx_bool                  computeVirial,
+                           real*                     dhdlambda,
+                           bool                      computeVirial,
                            tensor                    constraintsVirial)
 {
     if (constr != nullptr)
     {
-        constr->apply(do_log,
-                      do_ene,
+        constr->apply(computeRmsd,
                       step,
                       1,
                       1.0,
@@ -1438,7 +1420,7 @@ void constrain_coordinates(gmx::Constraints*         constr,
                       ArrayRef<RVec>(),
                       state->box,
                       state->lambda[FreeEnergyPerturbationCouplingType::Bonded],
-                      dvdlambda,
+                      dhdlambda,
                       state->v.arrayRefWithPadding(),
                       computeVirial,
                       constraintsVirial,

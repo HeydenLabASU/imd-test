@@ -43,6 +43,8 @@
 
 #include "config.h"
 
+#include <cstddef>
+
 #include <memory>
 
 #include "gromacs/gpu_utils/device_context.h"
@@ -68,15 +70,12 @@ struct DeviceInformation;
  * of their lifetime.
  *
  * This also doesn't manage cuFFT/clFFT kernels, which depend on the PME grid dimensions.
- *
- * TODO: pass cl_context to the constructor and not create it inside.
- * See also Issue #2522.
  */
 struct PmeGpuProgramImpl
 {
-    /*! \brief
-     * This is a handle to the GPU context, which is just a dummy in CUDA,
-     * but is created/destroyed by this class in OpenCL.
+    /*! \brief A handle to the device context (managed externally).
+     *
+     * Only used in OpenCL for JIT compilation.
      */
     const DeviceContext& deviceContext_;
 
@@ -166,6 +165,7 @@ struct PmeGpuProgramImpl
     PmeKernelHandle solveYZXEnergyKernelB;
     PmeKernelHandle solveXYZEnergyKernelB;
     //@}
+    PmeKernelHandle nvshmemSignalKern;
 
     PmeGpuProgramImpl() = delete;
     //! Constructor for the given device

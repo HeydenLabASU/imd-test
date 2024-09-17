@@ -46,15 +46,19 @@
 #include <cstring>
 
 #include <algorithm>
+#include <iterator>
 #include <numeric>
 #include <string>
 #include <vector>
 
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/block.h"
 #include "gromacs/topology/index.h"
 #include "gromacs/topology/mtop_lookup.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/smalloc.h"
@@ -77,14 +81,15 @@ bool IndexGroupsAndNames::containsGroupName(const std::string& groupName) const
             });
 }
 
-std::vector<index> IndexGroupsAndNames::indices(const std::string& groupName) const
+std::vector<Index> IndexGroupsAndNames::indices(const std::string& groupName) const
 {
     if (!containsGroupName(groupName))
     {
         GMX_THROW(
                 InconsistentInputError(
                         std::string("Group ") + groupName
-                        + " referenced in the .mdp file was not found in the index file.\n"
+                        + " referenced in the .mdp file was not found in the list of index "
+                          "groups.\n"
                           "Group names must match either [moleculetype] names or custom index "
                           "group\n"
                           "names, in which case you must supply an index file to the '-n' option\n"
@@ -95,7 +100,7 @@ std::vector<index> IndexGroupsAndNames::indices(const std::string& groupName) co
                 return equalCaseInsensitive(groupName, indexGroup.name);
             });
     const auto         groupIndex = std::distance(std::begin(indexGroups_), groupNamePosition);
-    std::vector<index> groupIndices(indexGroups_[groupIndex].particleIndices.begin(),
+    std::vector<Index> groupIndices(indexGroups_[groupIndex].particleIndices.begin(),
                                     indexGroups_[groupIndex].particleIndices.end());
     return groupIndices;
 }
@@ -201,16 +206,12 @@ void gmx_ana_indexgrps_free(gmx_ana_indexgrps_t* g)
 bool gmx_ana_indexgrps_extract(gmx_ana_index_t* dest, std::string* destName, gmx_ana_indexgrps_t* src, int n)
 {
     destName->clear();
-    if (n < 0 || n >= gmx::index(src->g.size()))
+    if (n < 0 || n >= gmx::Index(src->g.size()))
     {
         dest->isize = 0;
         return false;
     }
-
-    if (destName != nullptr)
-    {
-        *destName = src->names[n];
-    }
+    *destName = src->names[n];
     gmx_ana_index_copy(dest, &src->g[n], true);
     return true;
 }
@@ -254,7 +255,7 @@ bool gmx_ana_indexgrps_find(gmx_ana_index_t* dest, std::string* destName, gmx_an
  */
 void gmx_ana_indexgrps_print(gmx::TextWriter* writer, gmx_ana_indexgrps_t* g, int maxn)
 {
-    for (gmx::index i = 0; i < gmx::ssize(g->g); ++i)
+    for (gmx::Index i = 0; i < gmx::ssize(g->g); ++i)
     {
         writer->writeString(gmx::formatString(" Group %2zd \"%s\" ", i, g->names[i].c_str()));
         gmx_ana_index_dump(writer, &g->g[i], maxn);

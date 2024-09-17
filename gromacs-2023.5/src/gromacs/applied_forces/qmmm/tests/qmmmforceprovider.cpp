@@ -42,10 +42,14 @@
 
 #include "gromacs/applied_forces/qmmm/qmmmforceprovider.h"
 
+#include <memory>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "gromacs/applied_forces/qmmm/qmmmtypes.h"
+#include "gromacs/domdec/localatomset.h"
 #include "gromacs/domdec/localatomsetmanager.h"
 #include "gromacs/fileio/confio.h"
 #include "gromacs/gmxpreprocess/grompp.h"
@@ -55,6 +59,8 @@
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/logger.h"
 #include "gromacs/utility/path.h"
 #include "gromacs/utility/textwriter.h"
 
@@ -62,6 +68,8 @@
 #include "testutils/refdata.h"
 #include "testutils/testasserts.h"
 #include "testutils/testfilemanager.h"
+
+enum class PbcType : int;
 
 namespace gmx
 {
@@ -72,10 +80,10 @@ public:
     void setDefaultParameters()
     {
         parameters_.active_                = true;
-        std::vector<gmx::index> qmIndicies = { 0, 1, 2 };
-        std::vector<gmx::index> mmIndicies = { 3, 4, 5 };
-        LocalAtomSet            set1 = atomSetManager_.add(ArrayRef<const gmx::index>(qmIndicies));
-        LocalAtomSet            set2 = atomSetManager_.add(ArrayRef<const gmx::index>(mmIndicies));
+        std::vector<gmx::Index> qmIndicies = { 0, 1, 2 };
+        std::vector<gmx::Index> mmIndicies = { 3, 4, 5 };
+        LocalAtomSet            set1 = atomSetManager_.add(ArrayRef<const gmx::Index>(qmIndicies));
+        LocalAtomSet            set2 = atomSetManager_.add(ArrayRef<const gmx::Index>(mmIndicies));
         qmAtomSet_                   = std::make_unique<LocalAtomSet>(set1);
         mmAtomSet_                   = std::make_unique<LocalAtomSet>(set2);
     }

@@ -43,11 +43,13 @@
 
 #include "config.h"
 
-#if GMX_GPU
+#if GMX_GPU && !GMX_GPU_HIP
 
 #    include "gromacs/gpu_utils/device_stream_manager.h"
 #    include "gromacs/gpu_utils/devicebuffer.h"
 #    include "gromacs/gpu_utils/gpueventsynchronizer.h"
+#    include "gromacs/math/functions.h"
+#    include "gromacs/math/utilities.h"
 #    include "gromacs/math/vectypes.h"
 #    include "gromacs/mdtypes/state_propagator_data_gpu.h"
 #    include "gromacs/timing/wallcycle.h"
@@ -73,10 +75,19 @@ StatePropagatorDataGpu::Impl::Impl(const DeviceStreamManager& deviceStreamManage
             "GPU state propagator data object should only be constructed on the GPU code-paths.");
 
     // We need to keep local copies for re-initialization.
-    pmeStream_      = &deviceStreamManager.stream(DeviceStreamType::Pme);
-    localStream_    = &deviceStreamManager.stream(DeviceStreamType::NonBondedLocal);
-    nonLocalStream_ = &deviceStreamManager.stream(DeviceStreamType::NonBondedNonLocal);
-    updateStream_   = &deviceStreamManager.stream(DeviceStreamType::UpdateAndConstraints);
+    pmeStream_      = deviceStreamManager.streamIsValid(DeviceStreamType::Pme)
+                              ? &deviceStreamManager.stream(DeviceStreamType::Pme)
+                              : nullptr;
+    localStream_    = deviceStreamManager.streamIsValid(DeviceStreamType::NonBondedLocal)
+                              ? &deviceStreamManager.stream(DeviceStreamType::NonBondedLocal)
+                              : nullptr;
+    nonLocalStream_ = deviceStreamManager.streamIsValid(DeviceStreamType::NonBondedNonLocal)
+                              ? &deviceStreamManager.stream(DeviceStreamType::NonBondedNonLocal)
+                              : nullptr;
+    updateStream_   = deviceStreamManager.streamIsValid(DeviceStreamType::UpdateAndConstraints)
+                              ? &deviceStreamManager.stream(DeviceStreamType::UpdateAndConstraints)
+                              : nullptr;
+
 
     // Map the atom locality to the stream that will be used for coordinates,
     // velocities and forces transfers. Same streams are used for H2D and D2H copies.
@@ -132,7 +143,24 @@ StatePropagatorDataGpu::Impl::Impl(const DeviceStream*  pmeStream,
     fCopyStreams_[AtomLocality::All]      = nullptr;
 }
 
-StatePropagatorDataGpu::Impl::~Impl() {}
+StatePropagatorDataGpu::Impl::~Impl()
+{
+    // Flush all the streams before freeing memory. See #4519.
+    const std::array<const DeviceStream*, 6> allStreams{ pmeStream_,          localStream_,
+                                                         nonLocalStream_,     updateStream_,
+                                                         copyInStream_.get(), memsetStream_.get() };
+    for (const DeviceStream* stream : allStreams)
+    {
+        if (stream)
+        {
+            stream->synchronize();
+        }
+    }
+
+    freeDeviceBuffer(&d_x_);
+    freeDeviceBuffer(&d_v_);
+    freeDeviceBuffer(&d_f_);
+}
 
 void StatePropagatorDataGpu::Impl::reinit(int numAtomsLocal, int numAtomsAll)
 {
@@ -145,8 +173,7 @@ void StatePropagatorDataGpu::Impl::reinit(int numAtomsLocal, int numAtomsAll)
     int numAtomsPadded;
     if (allocationBlockSizeDivisor_ > 0)
     {
-        numAtomsPadded = ((numAtomsAll_ + allocationBlockSizeDivisor_ - 1) / allocationBlockSizeDivisor_)
-                         * allocationBlockSizeDivisor_;
+        numAtomsPadded = divideRoundUp(numAtomsAll_, allocationBlockSizeDivisor_) * allocationBlockSizeDivisor_;
     }
     else
     {

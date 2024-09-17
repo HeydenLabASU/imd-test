@@ -114,12 +114,12 @@ class ListedForcesGpu::Impl
 {
 public:
     //! Constructor
-    Impl(const gmx_ffparams_t&    ffparams,
-         float                    electrostaticsScaleFactor,
-         const DeviceInformation& deviceInfo,
-         const DeviceContext&     deviceContext,
-         const DeviceStream&      deviceStream,
-         gmx_wallcycle*           wcycle);
+    Impl(const gmx_ffparams_t& ffparams,
+         float                 electrostaticsScaleFactor,
+         int                   numEnergyGroupsForListedForces,
+         const DeviceContext&  deviceContext,
+         const DeviceStream&   deviceStream,
+         gmx_wallcycle*        wcycle);
     //! \brief Destructor, non-default needed for freeing device-side buffers
     ~Impl();
 
@@ -173,7 +173,7 @@ private:
     std::array<HostInteractionList, F_NRE> iLists_;
 
     //! Tells whether there are any interaction in iLists.
-    bool haveInteractions_;
+    bool haveInteractions_ = false;
     //! Interaction lists on the device.
     std::array<DeviceBuffer<t_iatom>, F_NRE> d_iAtoms_      = {};
     std::array<int, F_NRE>                   d_iAtomsAlloc_ = {};

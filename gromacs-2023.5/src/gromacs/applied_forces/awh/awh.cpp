@@ -53,8 +53,13 @@
 #include <cstring>
 
 #include <algorithm>
+#include <iterator>
+#include <utility>
 #include <vector>
 
+#include "gromacs/applied_forces/awh/biasstate.h"
+#include "gromacs/applied_forces/awh/coordstate.h"
+#include "gromacs/applied_forces/awh/dimparams.h"
 #include "gromacs/fileio/enxio.h"
 #include "gromacs/gmxlib/network.h"
 #include "gromacs/math/units.h"
@@ -64,6 +69,7 @@
 #include "gromacs/mdtypes/awh_params.h"
 #include "gromacs/mdtypes/commrec.h"
 #include "gromacs/mdtypes/inputrec.h"
+#include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/pull_params.h"
 #include "gromacs/mdtypes/state.h"
 #include "gromacs/pbcutil/pbc.h"
@@ -74,6 +80,7 @@
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/pleasecite.h"
+#include "gromacs/utility/stringutil.h"
 
 #include "bias.h"
 #include "biassharing.h"
@@ -138,6 +145,18 @@ static bool anyDimUsesProvider(const AwhParams& awhParams, const AwhCoordinatePr
                        });
 }
 
+/*! \brief Checks whether any bias scales the target distribution based on the AWH friction metric.
+ *
+ * \param[in] awhParams The AWH params to check.
+ * \returns true if any of the biases scale the target distribution by the friction metric.
+ */
+static bool anyBiasIsScaledByMetric(const AwhParams& awhParams)
+{
+    return std::any_of(awhParams.awhBiasParams().begin(),
+                       awhParams.awhBiasParams().end(),
+                       [](const auto& awhBiasParam) { return awhBiasParam.scaleTargetByMetric(); });
+}
+
 BiasCoupledToSystem::BiasCoupledToSystem(Bias bias, const std::vector<int>& pullCoordIndex) :
     bias_(std::move(bias)), pullCoordIndex_(pullCoordIndex)
 {
@@ -179,6 +198,11 @@ Awh::Awh(FILE*                 fplog,
         {
             please_cite(fplog, "Lundborg2021");
         }
+
+        if (anyBiasIsScaledByMetric(awhParams))
+        {
+            please_cite(fplog, "Lundborg2023");
+        }
     }
 
     if (haveBiasSharingWithinSimulation(awhParams))
@@ -198,7 +222,7 @@ Awh::Awh(FILE*                 fplog,
         {
             for (int k = 0; k < awhParams.numBias(); k++)
             {
-                const int shareGroup = awhParams.awhBiasParams()[k].shareGroup();
+                const int shareGroup = awhParams.awhBiasParams(k).shareGroup();
                 if (shareGroup > 0)
                 {
                     fprintf(fplog,
@@ -285,6 +309,7 @@ Awh::Awh(FILE*                 fplog,
     if (biasSharing_ && MAIN(commRecord_))
     {
         std::vector<size_t> pointSize;
+        pointSize.reserve(biasCoupledToSystem_.size());
         for (auto const& biasCts : biasCoupledToSystem_)
         {
             pointSize.push_back(biasCts.bias_.state().points().size());

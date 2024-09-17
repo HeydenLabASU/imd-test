@@ -43,6 +43,9 @@
 
 #include "gromacs/applied_forces/qmmm/qmmm.h"
 
+#include <memory>
+#include <string>
+
 #include <gtest/gtest.h>
 
 #include "gromacs/gmxlib/network.h"
@@ -57,6 +60,7 @@
 #include "gromacs/mdtypes/mdatom.h"
 #include "gromacs/options/options.h"
 #include "gromacs/options/treesupport.h"
+#include "gromacs/utility/keyvaluetree.h"
 #include "gromacs/utility/keyvaluetreebuilder.h"
 #include "gromacs/utility/keyvaluetreetransform.h"
 #include "gromacs/utility/real.h"
@@ -102,7 +106,7 @@ public:
         assignOptionsFromKeyValueTree(&QMMMModuleOptions, transformedMdpValues.object(), nullptr);
     }
 
-    void intializeForceProviders() { QMMMModule_->initForceProviders(&QMMMForces_); }
+    void initializeForceProviders() { QMMMModule_->initForceProviders(&QMMMForces_); }
 
 protected:
     KeyValueTreeBuilder        mdpValueBuilder_;
@@ -119,7 +123,7 @@ TEST_F(QMMMTest, ForceProviderLackingInputThrows)
     makeQMMMModuleWithSetOptions();
 
     // Build the force provider, once all input data is gathered
-    EXPECT_ANY_THROW(intializeForceProviders());
+    EXPECT_ANY_THROW(initializeForceProviders());
 }
 
 } // namespace

@@ -43,6 +43,16 @@
 
 #include "config.h"
 
+#include <cstdio>
+
+#include <algorithm>
+#include <filesystem>
+#include <string>
+#include <tuple>
+#include <vector>
+
+#include <gtest/gtest.h>
+
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/utility/filestream.h"
 #include "gromacs/utility/path.h"
@@ -52,7 +62,13 @@
 #include "testutils/refdata.h"
 #include "testutils/setenv.h"
 #include "testutils/simulationdatabase.h"
+#include "testutils/testasserts.h"
+#include "testutils/testfilemanager.h"
 #include "testutils/xvgtest.h"
+
+#include "programs/mdrun/tests/comparison_helpers.h"
+#include "programs/mdrun/tests/energycomparison.h"
+#include "programs/mdrun/tests/trajectorycomparison.h"
 
 #include "moduletest.h"
 #include "simulatorcomparison.h"
@@ -112,16 +128,16 @@ TEST_P(FreeEnergyReferenceTest, WithinTolerances)
     SCOPED_TRACE(formatString("Comparing FEP simulation '%s' to reference", simulationName.c_str()));
 
     // Tolerance set to pass with identical code version and a range of different test setups for most tests
-    const auto defaultEnergyTolerance = relativeToleranceAsFloatingPoint(50.0, GMX_DOUBLE ? 1e-5 : 1e-4);
+    const auto defaultEnergyTolerance = relativeToleranceAsFloatingPoint(100.0, GMX_DOUBLE ? 5e-6 : 5e-5);
     // Some simulations are significantly longer, so they need a larger tolerance
-    const auto longEnergyTolerance = relativeToleranceAsFloatingPoint(50.0, GMX_DOUBLE ? 1e-4 : 1e-3);
+    const auto longEnergyTolerance = relativeToleranceAsFloatingPoint(100.0, GMX_DOUBLE ? 2e-5 : 2e-4);
     const bool isLongSimulation    = (simulationName == "expanded");
     const auto energyTolerance = isLongSimulation ? longEnergyTolerance : defaultEnergyTolerance;
 
     EnergyTermsToCompare energyTermsToCompare{ { interaction_function[F_EPOT].longname, energyTolerance } };
     for (const auto& interaction : interactionsList)
     {
-        energyTermsToCompare.emplace(interaction_function[interaction].longname, defaultEnergyTolerance);
+        energyTermsToCompare.emplace(interaction_function[interaction].longname, energyTolerance);
     }
 
     // Specify how trajectory frame matching must work (only testing forces).
@@ -144,15 +160,15 @@ TEST_P(FreeEnergyReferenceTest, WithinTolerances)
     auto simulationDhdlFileName       = fileManager_.getTemporaryFilePath("dhdl.xvg");
 
     // Run grompp
-    runner_.tprFileName_ = fileManager_.getTemporaryFilePath("sim.tpr").u8string();
+    runner_.tprFileName_ = fileManager_.getTemporaryFilePath("sim.tpr").string();
     runner_.useTopGroAndMdpFromFepTestDatabase(simulationName);
     runner_.setMaxWarn(maxNumWarnings);
     runGrompp(&runner_);
 
     // Do mdrun
-    runner_.fullPrecisionTrajectoryFileName_ = simulationTrajectoryFileName.u8string();
-    runner_.edrFileName_                     = simulationEdrFileName.u8string();
-    runner_.dhdlFileName_                    = simulationDhdlFileName.u8string();
+    runner_.fullPrecisionTrajectoryFileName_ = simulationTrajectoryFileName.string();
+    runner_.edrFileName_                     = simulationEdrFileName.string();
+    runner_.dhdlFileName_                    = simulationDhdlFileName.string();
     runMdrun(&runner_);
 
     /* Currently used tests write trajectory (x/v/f) frames every 20 steps.
@@ -171,28 +187,22 @@ TEST_P(FreeEnergyReferenceTest, WithinTolerances)
     TestReferenceData    refData;
     TestReferenceChecker rootChecker(refData.rootChecker());
     // Check that the energies agree with the refdata within tolerance.
-    checkEnergiesAgainstReferenceData(simulationEdrFileName.u8string(), energyTermsToCompare, &rootChecker);
+    checkEnergiesAgainstReferenceData(simulationEdrFileName.string(), energyTermsToCompare, &rootChecker);
     // Check that the trajectories agree with the refdata within tolerance.
     if (testTwoTrajectoryFrames)
     {
-        checkTrajectoryAgainstReferenceData(simulationTrajectoryFileName.u8string(),
-                                            trajectoryComparison,
-                                            &rootChecker,
-                                            MaxNumFrames(2));
+        checkTrajectoryAgainstReferenceData(
+                simulationTrajectoryFileName.string(), trajectoryComparison, &rootChecker, MaxNumFrames(2));
     }
     else if (testOneTrajectoryFrame)
     {
-        checkTrajectoryAgainstReferenceData(simulationTrajectoryFileName.u8string(),
-                                            trajectoryComparison,
-                                            &rootChecker,
-                                            MaxNumFrames(1));
+        checkTrajectoryAgainstReferenceData(
+                simulationTrajectoryFileName.string(), trajectoryComparison, &rootChecker, MaxNumFrames(1));
     }
     else
     {
-        checkTrajectoryAgainstReferenceData(simulationTrajectoryFileName.u8string(),
-                                            trajectoryComparison,
-                                            &rootChecker,
-                                            MaxNumFrames(0));
+        checkTrajectoryAgainstReferenceData(
+                simulationTrajectoryFileName.string(), trajectoryComparison, &rootChecker, MaxNumFrames(0));
     }
     if (File::exists(simulationDhdlFileName, File::returnFalseOnError))
     {
@@ -218,6 +228,10 @@ INSTANTIATE_TEST_SUITE_P(
                                                MaxNumWarnings(1),
                                                { F_DVDL_COUL, F_DVDL_VDW } },
                 FreeEnergyReferenceTestParams{ "coulandvdwtogether", MaxNumWarnings(1), { F_DVDL } },
+                FreeEnergyReferenceTestParams{ "coulandvdwtogether-net-charge", MaxNumWarnings(2), { F_DVDL } },
+                FreeEnergyReferenceTestParams{ "coulandvdwtogether-decouple-counter-charge",
+                                               MaxNumWarnings(1),
+                                               { F_DVDL } },
                 FreeEnergyReferenceTestParams{ "expanded", MaxNumWarnings(1), { F_DVDL_COUL, F_DVDL_VDW } },
                 // Tolerated warnings: No default bonded interaction types for perturbed atoms (10x)
                 FreeEnergyReferenceTestParams{ "relative",
@@ -245,6 +259,10 @@ INSTANTIATE_TEST_SUITE_P(
                                                MaxNumWarnings(1),
                                                { F_DVDL_COUL, F_DVDL_VDW } },
                 FreeEnergyReferenceTestParams{ "coulandvdwtogether", MaxNumWarnings(1), { F_DVDL } },
+                FreeEnergyReferenceTestParams{ "coulandvdwtogether-net-charge", MaxNumWarnings(2), { F_DVDL } },
+                FreeEnergyReferenceTestParams{ "coulandvdwtogether-decouple-counter-charge",
+                                               MaxNumWarnings(1),
+                                               { F_DVDL } },
                 FreeEnergyReferenceTestParams{ "expanded", MaxNumWarnings(1), { F_DVDL_COUL, F_DVDL_VDW } },
                 // Tolerated warnings: No default bonded interaction types for perturbed atoms (10x)
                 FreeEnergyReferenceTestParams{ "relative",

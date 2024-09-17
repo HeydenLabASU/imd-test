@@ -43,9 +43,18 @@
 
 #include "qmmminputgenerator.h"
 
+#include <cmath>
+#include <cstddef>
+
+#include <vector>
+
+#include "gromacs/applied_forces/qmmm/qmmmtypes.h"
 #include "gromacs/math/units.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/stringutil.h"
+
+enum class PbcType : int;
 
 namespace gmx
 {
@@ -76,7 +85,7 @@ QMMMInputGenerator::QMMMInputGenerator(const QMMMParameters& parameters,
     computeQMBox(sc_qmBoxScale, sc_qmBoxMinLength);
 }
 
-bool QMMMInputGenerator::isQMAtom(index globalAtomIndex) const
+bool QMMMInputGenerator::isQMAtom(Index globalAtomIndex) const
 {
     return (qmAtoms_.find(globalAtomIndex) != qmAtoms_.end());
 }
@@ -279,7 +288,7 @@ std::string QMMMInputGenerator::generateQMMMSection() const
             // Loop over all QM atoms indexes
             for (size_t j = 0; j < nQm; j++)
             {
-                if (parameters_.atomNumbers_[parameters_.qmIndices_[j]] == static_cast<index>(i))
+                if (parameters_.atomNumbers_[parameters_.qmIndices_[j]] == static_cast<Index>(i))
                 {
                     res += formatString(" %d", static_cast<int>(parameters_.qmIndices_[j] + 1));
                 }
@@ -486,7 +495,7 @@ RVec computeQMBoxVec(const RVec& a, const RVec& b, const RVec& c, real h, real m
     dx /= dx.norm();
 
     // Transform a
-    res = h / static_cast<real>(fabs(vec0.dot(dx))) * a;
+    res = h / std::fabs(vec0.dot(dx)) * a;
 
     // If vector is smaller than minL then scale it up
     if (res.norm() < minNorm)

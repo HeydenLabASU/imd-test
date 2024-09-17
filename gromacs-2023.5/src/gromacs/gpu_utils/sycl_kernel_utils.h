@@ -46,28 +46,35 @@
 //! \brief Full warp active thread mask used in CUDA warp-level primitives.
 static constexpr unsigned int c_cudaFullWarpMask = 0xffffffff;
 
-#if defined(SYCL_EXT_ONEAPI_ASSERT) && SYCL_EXT_ONEAPI_ASSERT
+// Prior to AdaptiveCpp 24.06, only HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_HIP is defined
+// TODO: Remove once we have AdaptiveCpp 24.06 as the minimum supported version
+#if GMX_SYCL_ACPP && !defined(ACPP_LIBKERNEL_IS_DEVICE_PASS_HIP) \
+        && defined(HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_HIP)
+#    define ACPP_LIBKERNEL_IS_DEVICE_PASS_HIP HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_HIP
+#endif
+
+#if defined(SYCL_EXT_ONEAPI_ASSERT) && SYCL_EXT_ONEAPI_ASSERT && !defined(__AMDGCN__)
 #    define SYCL_ASSERT(condition) assert(condition)
 #else
 /* Assertions are not defined in SYCL standard, but they are available as oneAPI extension sycl_ext_oneapi_assert.
  * Technically, asserts should work just fine with hipSYCL, since they are supported by CUDA since sm_20.
  * But with some settings (Clang 14, hipSYCL 0.9.2, RelWithAssert), CUDA build fails at link time:
  * ptxas fatal   : Unresolved extern function '__assert_fail'
- * So, we just disable kernel asserts unless they are promised to be available. */
+ * So, we just disable kernel asserts unless they are promised to be available.
+ * Also disable asserts on AMD GPUs, since they cause `hipErrorIllegalState` (oneAPI 2024.1-2024.2, ROCm 5.4-6.1) */
 #    define SYCL_ASSERT(condition)
 #endif
 
-#if GMX_SYCL_HIPSYCL && HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_HIP
+#if GMX_SYCL_ACPP && ACPP_LIBKERNEL_IS_DEVICE_PASS_HIP
 HIPSYCL_UNIVERSAL_TARGET
 static inline void atomicAddOptimizedAmd(float gmx_unused* ptr, const float gmx_unused delta)
 {
 #    if defined(__gfx908__) // Special function for AMD MI100
-#        pragma clang diagnostic push
-#        pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    CLANG_DIAGNOSTIC_IGNORE("-Wdeprecated-declarations")
     atomicAddNoRet(ptr, delta);
-#        pragma clang diagnostic pop
+    CLANG_DIAGNOSTIC_RESET
 #    elif defined(__gfx90a__) // Special function for AMD MI200
-    unsafeAtomicAdd(ptr, delta); // Not checked on real hardware, see #4465
+    unsafeAtomicAdd(ptr, delta);
 #    else
     atomicAdd(ptr, delta);
 #    endif
@@ -79,7 +86,7 @@ constexpr bool compilingForHost()
 {
     // Skip compiling for CPU. Makes compiling this file ~10% faster for oneAPI/CUDA or
     // hipSYCL/CUDA. For DPC++, any non-CPU targets must be explicitly allowed in the #if below.
-#if GMX_SYCL_HIPSYCL
+#if GMX_SYCL_ACPP
     __hipsycl_if_target_host(return true;);
 #endif
     // We need to list all valid device targets here
@@ -126,26 +133,26 @@ constexpr bool skipKernelCompilation()
     return false;
 }
 
-template<typename T, sycl_2020::memory_scope MemoryScope, sycl::access::address_space AddressSpace>
+template<typename T, sycl::memory_scope MemoryScope, sycl::access::address_space AddressSpace>
 static inline void atomicAddDefault(T& val, const T delta)
 {
-    using sycl_2020::memory_order;
-    sycl_2020::atomic_ref<T, memory_order::relaxed, MemoryScope, AddressSpace> ref(val);
+    using sycl::memory_order;
+    sycl::atomic_ref<T, memory_order::relaxed, MemoryScope, AddressSpace> ref(val);
     ref.fetch_add(delta);
 }
 
 /*! \brief Convenience wrapper to do atomic addition to a global buffer.
  */
 template<typename T,
-         sycl_2020::memory_scope     MemoryScope  = sycl_2020::memory_scope::device,
+         sycl::memory_scope          MemoryScope  = sycl::memory_scope::device,
          sycl::access::address_space AddressSpace = sycl::access::address_space::global_space>
 static inline void atomicFetchAdd(T& val, const T delta)
 {
     using sycl::access::address_space;
     // Check if we need/can call the optimized atomicAdd for AMD devices, see #4465.
-    if constexpr (GMX_SYCL_HIPSYCL && std::is_same_v<T, float> && AddressSpace == address_space::global_space)
+    if constexpr (GMX_SYCL_ACPP && std::is_same_v<T, float> && AddressSpace == address_space::global_space)
     {
-#if GMX_SYCL_HIPSYCL && HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_HIP
+#if GMX_SYCL_ACPP && ACPP_LIBKERNEL_IS_DEVICE_PASS_HIP
         atomicAddOptimizedAmd(&val, delta);
 #else
         atomicAddDefault<T, MemoryScope, AddressSpace>(val, delta);
@@ -166,16 +173,15 @@ static inline void atomicFetchAdd(T& val, const T delta)
 template<typename T>
 static inline void atomicFetchAddLocal(T& val, const T delta)
 {
-    atomicFetchAdd<T, sycl_2020::memory_scope::work_group, sycl::access::address_space::local_space>(
-            val, delta);
+    atomicFetchAdd<T, sycl::memory_scope::work_group, sycl::access::address_space::local_space>(val, delta);
 }
 
 /*! \brief Convenience wrapper to do atomic loads from a global buffer.
  */
-template<typename T, sycl_2020::memory_scope MemoryScope = sycl_2020::memory_scope::device>
+template<typename T, sycl::memory_scope MemoryScope = sycl::memory_scope::device>
 static inline T atomicLoad(T& val)
 {
-#if GMX_SYCL_HIPSYCL && GMX_HIPSYCL_HAVE_CUDA_TARGET
+#if GMX_SYCL_ACPP && GMX_ACPP_HAVE_CUDA_TARGET
     /* Some versions of Clang do not support atomicLoad in NVPTX backend, and die with ICE,
      * e.g. Clang 14, hipSYCL 0.9.2, CUDA 11.5, Debug:
      * fatal error: error in backend: Cannot select: 0xd870450: i32,ch = AtomicLoad<(load seq_cst (s32) from %ir.27)>.
@@ -184,151 +190,15 @@ static inline T atomicLoad(T& val)
      * Allegedly, datatypes up to 128 bytes should be fine, but we only use floats, so we have
      * a very concervative 4-byte limit here.
      * As a demonstration of correctness, we don't use atomic loads in CUDA and it's doing fine.
-     * See https://github.com/illuhad/hipSYCL/issues/752 */
+     * See https://github.com/AdaptiveCpp/AdaptiveCpp/issues/752 */
     static_assert(sizeof(T) <= 4);
     return val;
 #else
     using sycl::access::address_space;
-    sycl_2020::atomic_ref<T, sycl_2020::memory_order::relaxed, MemoryScope, address_space::global_space> ref(
-            val);
+    sycl::atomic_ref<T, sycl::memory_order::relaxed, MemoryScope, address_space::global_space> ref(val);
     return ref.load();
 #endif
 }
-
-/*! \brief Special packed Float3 flavor to help compiler optimizations on AMD CDNA2 devices.
- *
- * Full FP32 performance of AMD CDNA2 devices, like MI200-series, can only be achieved
- * when operating on float2, in a SIMD2-fashion. Compiler (at least up to ROCm 5.6)
- * can use packed math automatically for normal Float3, but generates a lot of
- * data movement between normal and packed registers. Using this class helps avoid
- * this problem.
- *
- * The approach is based on the similar solution used by AMD and StreamHPC in their port.
- *
- * Currently only used in NBNXM kernels if GMX_NBNXM_ENABLE_PACKED_FLOAT3 is enabled
- *
- * \todo This class shall be removed as soon as the compiler is improved.
- *
- * See issue #4854 for more details.
- */
-struct AmdPackedFloat3
-{
-    typedef float __attribute__((ext_vector_type(2))) Native_float2_;
-
-    /* According to C++ standard, we should give names to all
-     * the types and fields declared below. This, however, makes
-     * this code very verbose, and harms readability in a major
-     * way while this code is aimed to be used in a pretty niche
-     * case with relatively small selection of compilers
-     * (flavors of Clang 14-18, maybe later). So, we prefer
-     * to disable the warnings. */
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wnested-anon-types"
-#pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
-    struct __attribute__((packed))
-    {
-        union
-        {
-            Native_float2_ xy_;
-            struct
-            {
-                float x_, y_;
-            };
-        };
-        float z_;
-    };
-#pragma clang diagnostic pop
-    template<typename Index>
-    __attribute__((always_inline)) float operator[](Index i) const
-    {
-        switch (i)
-        {
-            case 0: return xy_.x;
-            case 1: return xy_.y;
-            default: SYCL_ASSERT(i == 2); return z_;
-        }
-    }
-    template<typename Index>
-    __attribute__((always_inline)) float& operator[](Index i)
-    {
-        switch (i)
-        {
-            case 0: return x_;
-            case 1: return y_;
-            default: SYCL_ASSERT(i == 2); return z_;
-        }
-    }
-
-    __attribute__((always_inline)) float          x() const { return xy_.x; }
-    __attribute__((always_inline)) float          y() const { return xy_.y; }
-    __attribute__((always_inline)) Native_float2_ xy() const { return xy_; }
-    __attribute__((always_inline)) float          z() const { return z_; }
-
-    AmdPackedFloat3() = default;
-
-    AmdPackedFloat3(float x, float y, float z) : xy_{ x, y }, z_{ z } {}
-
-    AmdPackedFloat3(Native_float2_ xy, float z) : xy_{ xy }, z_{ z } {}
-
-    AmdPackedFloat3(Float3 r) : xy_{ r[0], r[1] }, z_{ r[2] } {}
-
-    explicit operator Float3() const { return Float3{ xy_.x, xy_.y, z_ }; }
-
-    __attribute__((always_inline)) AmdPackedFloat3& operator=(const AmdPackedFloat3& x)
-    {
-        xy_ = x.xy_;
-        z_  = x.z_;
-        return *this;
-    }
-
-    //! Allow inplace addition for AmdPackedFloat3
-    __attribute__((always_inline)) AmdPackedFloat3& operator+=(const AmdPackedFloat3& right)
-    {
-        return *this = *this + right;
-    }
-    //! Allow inplace subtraction for AmdPackedFloat3
-    __attribute__((always_inline)) AmdPackedFloat3& operator-=(const AmdPackedFloat3& right)
-    {
-        return *this = *this - right;
-    }
-    //! Allow vector addition
-    __attribute__((always_inline)) AmdPackedFloat3 operator+(const AmdPackedFloat3& right) const
-    {
-        return { xy_ + right.xy(), z_ + right.z() };
-    }
-    //! Allow vector subtraction
-    __attribute__((always_inline)) AmdPackedFloat3 operator-(const AmdPackedFloat3& right) const
-    {
-        return { xy_ - right.xy(), z_ - right.z() };
-    }
-    //! Scale vector by a scalar
-    __attribute__((always_inline)) AmdPackedFloat3& operator*=(const float& right)
-    {
-        xy_ *= right;
-        z_ *= right;
-        return *this;
-    }
-
-    //! Length^2 of vector
-    __attribute__((always_inline)) float norm2() const { return dot(*this); }
-
-    //! Return dot product
-    __attribute__((always_inline)) float dot(const AmdPackedFloat3& right) const
-    {
-        return x() * right.x() + y() * right.y() + z() * right.z();
-    }
-};
-static_assert(sizeof(AmdPackedFloat3) == 12);
-
-__attribute__((always_inline)) static AmdPackedFloat3 operator*(const AmdPackedFloat3& v, const float& s)
-{
-    return { v.xy() * s, v.z() * s };
-}
-__attribute__((always_inline)) static AmdPackedFloat3 operator*(const float& s, const AmdPackedFloat3& v)
-{
-    return { v.xy() * s, v.z() * s };
-}
-
 
 /*! \brief Issue an intra sub-group barrier.
  *
@@ -338,7 +208,7 @@ __attribute__((always_inline)) static AmdPackedFloat3 operator*(const float& s, 
 template<int Dim>
 static inline void subGroupBarrier(const sycl::nd_item<Dim> itemIdx)
 {
-#if GMX_SYCL_HIPSYCL
+#if GMX_SYCL_ACPP
     sycl::group_barrier(itemIdx.get_sub_group(), sycl::memory_scope::sub_group);
 #else
     itemIdx.get_sub_group().barrier();
@@ -358,7 +228,7 @@ static inline void subGroupBarrier(const sycl::nd_item<Dim> itemIdx)
  * Ref: https://gpuopen.com/learn/amd-gcn-assembly-cross-lane-operations
  */
 template<class T, int dppCtrl, int rowMask = 0xf, int bankMask = 0xf, bool boundCtrl = true>
-#    if GMX_SYCL_HIPSYCL
+#    if GMX_SYCL_ACPP
 __device__ __host__
 #    endif
         __attribute__((always_inline)) T
@@ -382,98 +252,28 @@ __device__ __host__
 }
 #endif
 
-namespace sycl_2020
+#if GMX_SYCL_ACPP && !(defined(ACPP_VERSION_MAJOR) && ACPP_VERSION_MAJOR >= 24)
+namespace sycl
 {
-#if GMX_SYCL_HIPSYCL
-__device__ __host__ static inline float shift_left(sycl::sub_group, float var, sycl::sub_group::linear_id_type delta)
-{
-    // No sycl::sub_group::shift_left / shuffle_down in hipSYCL yet
-#    ifdef SYCL_DEVICE_ONLY
-#        if defined(HIPSYCL_PLATFORM_CUDA) && defined(__HIPSYCL_ENABLE_CUDA_TARGET__)
-    return __shfl_down_sync(c_cudaFullWarpMask, var, delta);
-#        elif defined(HIPSYCL_PLATFORM_ROCM) && defined(__HIPSYCL_ENABLE_HIP_TARGET__)
-    // Do we need more ifdefs? https://github.com/ROCm-Developer-Tools/HIP/issues/1491
-    return __shfl_down(var, delta);
-#        else
-#            error "Unsupported hipSYCL target"
-#        endif
-#    else
-    // Should never be called
-    GMX_UNUSED_VALUE(var);
-    GMX_UNUSED_VALUE(delta);
-    SYCL_ASSERT(false);
-    return NAN;
-#    endif
-}
-#elif GMX_SYCL_DPCPP
-static inline float shift_left(sycl::sub_group sg, float var, sycl::sub_group::linear_id_type delta)
-{
-    return sg.shuffle_down(var, delta);
-}
-#endif
-
-#if GMX_SYCL_HIPSYCL
-__device__ __host__ static inline float shift_right(sycl::sub_group, float var, sycl::sub_group::linear_id_type delta)
-{
-    // No sycl::sub_group::shift_right / shuffle_up in hipSYCL yet
-#    ifdef SYCL_DEVICE_ONLY
-#        if defined(HIPSYCL_PLATFORM_CUDA) && defined(__HIPSYCL_ENABLE_CUDA_TARGET__)
-    return __shfl_up_sync(c_cudaFullWarpMask, var, delta);
-#        elif defined(HIPSYCL_PLATFORM_ROCM) && defined(__HIPSYCL_ENABLE_HIP_TARGET__)
-    // Do we need more ifdefs? https://github.com/ROCm-Developer-Tools/HIP/issues/1491
-    return __shfl_up(var, delta);
-#        else
-#            error "Unsupported hipSYCL target"
-#        endif
-#    else
-    // Should never be called
-    SYCL_ASSERT(false);
-    GMX_UNUSED_VALUE(var);
-    GMX_UNUSED_VALUE(delta);
-    return NAN;
-#    endif
-}
-#elif GMX_SYCL_DPCPP
-static inline float shift_right(sycl::sub_group sg, float var, sycl::sub_group::linear_id_type delta)
-{
-    return sg.shuffle_up(var, delta);
-}
-#endif
-
-#if GMX_SYCL_HIPSYCL
-/*! \brief Polyfill for sycl::isfinite missing from hipSYCL
+/*! \brief Popcount instruction for SYCL
  *
- * Does not follow GROMACS style because it should follow the name for
- * which it is a polyfill. */
-template<typename Real>
-__device__ __host__ static inline bool isfinite(Real value)
+ * sycl::popcount is missing in AdaptiveCpp prior to 24.02.0.
+ * This is very basic version using Clang built-in.
+ */
+template<typename T>
+T popcount(T x)
 {
-    // This is not yet implemented in hipSYCL pending
-    // https://github.com/illuhad/hipSYCL/issues/636
-#    ifdef SYCL_DEVICE_ONLY
-#        if defined(HIPSYCL_PLATFORM_CUDA) && defined(__HIPSYCL_ENABLE_CUDA_TARGET__)
-    return ::isfinite(value);
-#        elif defined(HIPSYCL_PLATFORM_ROCM) && defined(__HIPSYCL_ENABLE_HIP_TARGET__)
-    return ::isfinite(value);
-#        else
-#            error "Unsupported hipSYCL target"
-#        endif
-#    else
-    // Should never be called
-    SYCL_ASSERT(false);
-    GMX_UNUSED_VALUE(value);
-    return false;
-#    endif
+    if constexpr (sizeof(T) == 4)
+    {
+        return __builtin_popcount(x);
+    }
+    else
+    {
+        static_assert(sizeof(T) == 8);
+        return __builtin_popcountll(x);
+    }
 }
-#elif GMX_SYCL_DPCPP
-template<typename Real>
-static inline bool isfinite(Real value)
-{
-    return sycl::isfinite(value);
-}
-
+} // namespace sycl
 #endif
-
-} // namespace sycl_2020
 
 #endif /* GMX_GPU_UTILS_SYCL_KERNEL_UTILS_H */

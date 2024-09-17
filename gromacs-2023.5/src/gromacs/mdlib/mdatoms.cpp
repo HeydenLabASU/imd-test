@@ -37,20 +37,33 @@
 
 #include <cmath>
 
+#include <algorithm>
 #include <memory>
 
 #include "gromacs/ewald/pme.h"
 #include "gromacs/gpu_utils/hostallocator.h"
 #include "gromacs/math/functions.h"
+#include "gromacs/math/paddedvector.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdlib/gmx_omp_nthreads.h"
 #include "gromacs/mdtypes/inputrec.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/mdatom.h"
+#include "gromacs/topology/atoms.h"
+#include "gromacs/topology/forcefieldparameters.h"
+#include "gromacs/topology/idef.h"
+#include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/mtop_atomloops.h"
 #include "gromacs/topology/mtop_lookup.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/topology/topology_enums.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/booltype.h"
+#include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/exceptions.h"
+#include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/smalloc.h"
 
 #define ALMOST_ZERO 1e-30
@@ -169,7 +182,6 @@ void atoms2md(const gmx_mtop_t&  mtop,
 {
     gmx_bool         bLJPME;
     const t_grpopts* opts;
-    int nthreads     gmx_unused;
 
     bLJPME = usingLJPme(inputrec.vdwtype);
 
@@ -262,7 +274,8 @@ void atoms2md(const gmx_mtop_t&  mtop,
     }
     int molb = 0;
 
-    nthreads = gmx_omp_nthreads_get(ModuleMultiThread::Default);
+    // In grompp, OpenMP is not initialized and nthreads_get returns 0. We want 1 thread in this case.
+    const int gmx_unused nthreads = std::max(gmx_omp_nthreads_get(ModuleMultiThread::Default), 1);
 #pragma omp parallel for num_threads(nthreads) schedule(static) firstprivate(molb)
     for (int i = 0; i < md->nr; i++)
     {

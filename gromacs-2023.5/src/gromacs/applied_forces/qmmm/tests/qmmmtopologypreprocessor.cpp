@@ -42,6 +42,8 @@
 
 #include "gromacs/applied_forces/qmmm/qmmmtopologypreprocessor.h"
 
+#include <filesystem>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -49,11 +51,13 @@
 #include "gromacs/fileio/confio.h"
 #include "gromacs/gmxpreprocess/grompp.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/topology/mtop_lookup.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/path.h"
 #include "gromacs/utility/textwriter.h"
 
@@ -61,6 +65,8 @@
 #include "testutils/refdata.h"
 #include "testutils/testasserts.h"
 #include "testutils/testfilemanager.h"
+
+enum class PbcType : int;
 
 namespace gmx
 {
@@ -73,26 +79,22 @@ public:
      */
     void makeMtopFromFile(const std::string& fileName, const std::string& mdpContent)
     {
-        const std::string simData =
-                gmx::test::TestFileManager::getTestSimulationDatabaseDirectory().u8string();
+        const std::filesystem::path simData =
+                gmx::test::TestFileManager::getTestSimulationDatabaseDirectory();
 
         // Generate empty mdp file
         const std::string mdpInputFileName =
-                fileManager_.getTemporaryFilePath(fileName + ".mdp").u8string();
+                fileManager_.getTemporaryFilePath(fileName + ".mdp").string();
         gmx::TextWriter::writeFileFromString(mdpInputFileName, mdpContent);
 
         // Generate tpr file
-        const std::string tprName = fileManager_.getTemporaryFilePath(fileName + ".tpr").u8string();
+        const std::string tprName = fileManager_.getTemporaryFilePath(fileName + ".tpr").string();
         {
             gmx::test::CommandLine caller;
             caller.append("grompp");
             caller.addOption("-f", mdpInputFileName);
-            caller.addOption(
-                    "-p",
-                    std::filesystem::path(simData).append(fileName).replace_extension(".top").u8string());
-            caller.addOption(
-                    "-c",
-                    std::filesystem::path(simData).append(fileName).replace_extension(".gro").u8string());
+            caller.addOption("-p", (simData / fileName).replace_extension(".top").string());
+            caller.addOption("-c", (simData / fileName).replace_extension(".gro").string());
             caller.addOption("-o", tprName);
             ASSERT_EQ(0, gmx_grompp(caller.argc(), caller.argv()));
         }
@@ -106,7 +108,7 @@ public:
 
 protected:
     gmx::test::TestFileManager fileManager_;
-    std::vector<index>         qmIndices_;
+    std::vector<Index>         qmIndices_;
     gmx_mtop_t                 mtop_;
 };
 

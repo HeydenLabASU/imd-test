@@ -42,13 +42,17 @@
 
 #include "gromacs/utility/exceptions.h"
 
+#include <cstdio>
 #include <cstring>
 
 #include <map>
 #include <memory>
 #include <new>
 #include <stdexcept>
+#include <string>
+#include <typeindex>
 #include <typeinfo>
+#include <utility>
 
 #include "gromacs/utility/basenetwork.h"
 #include "gromacs/utility/fatalerror.h"
@@ -523,9 +527,9 @@ void printFatalErrorMessage(FILE* fp, const std::exception& ex)
     {
         bPrintType = true;
     }
-    const char*           func = nullptr;
-    std::filesystem::path file;
-    int                   line = 0;
+    const char* func = nullptr;
+    const char* file = nullptr;
+    int         line = 0;
     if (gmxEx != nullptr)
     {
         const ThrowLocation* loc = gmxEx->getInfo<ExceptionInfoLocation>();

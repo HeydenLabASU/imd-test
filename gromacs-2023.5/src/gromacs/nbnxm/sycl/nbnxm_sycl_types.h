@@ -42,6 +42,8 @@
 #ifndef NBNXM_SYCL_TYPES_H
 #define NBNXM_SYCL_TYPES_H
 
+#include <memory>
+
 #include "gromacs/gpu_utils/devicebuffer.h"
 #include "gromacs/gpu_utils/devicebuffer_sycl.h"
 #include "gromacs/gpu_utils/gmxsycl.h"
@@ -54,6 +56,9 @@
 #include "gromacs/utility/enumerationhelpers.h"
 
 class GpuEventSynchronizer;
+
+namespace gmx
+{
 
 /*! \internal
  * \brief Main data structure for SYCL nonbonded force calculations.
@@ -91,28 +96,28 @@ struct NbnxmGpu
     int ncxy_ind = 0;
     /*! \brief number of elements allocated allocated in device buffer */
     int ncxy_ind_alloc = 0;
-
+    /*! \brief parameters required for the non-bonded calc. */
     NBParamGpu* nbparam = nullptr;
     /*! \brief pair-list data structures (local and non-local) */
-    gmx::EnumerationArray<Nbnxm::InteractionLocality, Nbnxm::gpu_plist*> plist = { { nullptr } };
+    EnumerationArray<InteractionLocality, std::unique_ptr<GpuPairlist>> plist = { { nullptr } };
     /*! \brief staging area where fshift/energies get downloaded. Will be removed in SYCL. */
     NBStagingData nbst;
     /*! \brief local and non-local GPU streams */
-    gmx::EnumerationArray<Nbnxm::InteractionLocality, const DeviceStream*> deviceStreams;
+    EnumerationArray<InteractionLocality, const DeviceStream*> deviceStreams;
 
     /*! \brief True if event-based timing is enabled. Always false for SYCL. */
     bool bDoTime = false;
     /*! \brief Dummy timers. */
-    Nbnxm::GpuTimers* timers = nullptr;
+    GpuTimers* timers = nullptr;
     /*! \brief Dummy timing data. */
     gmx_wallclock_gpu_nbnxn_t* timings = nullptr;
 
     //! true when a pair-list transfer has been done at this step
-    gmx::EnumerationArray<Nbnxm::InteractionLocality, bool> didPairlistH2D = { { false } };
+    EnumerationArray<InteractionLocality, bool> didPairlistH2D = { { false } };
     //! true when we we did pruning on this step
-    gmx::EnumerationArray<Nbnxm::InteractionLocality, bool> didPrune = { { false } };
+    EnumerationArray<InteractionLocality, bool> didPrune = { { false } };
     //! true when we did rolling pruning (at the previous step)
-    gmx::EnumerationArray<Nbnxm::InteractionLocality, bool> didRollingPrune = { { false } };
+    EnumerationArray<InteractionLocality, bool> didRollingPrune = { { false } };
 
     /*! \brief Event triggered when the non-local non-bonded
      * kernel is done (and the local transfer can proceed) */
@@ -132,7 +137,9 @@ struct NbnxmGpu
      * domain. As long as bonded work is not split up into
      * local/nonlocal, if there is bonded GPU work, both flags
      * will be true. */
-    gmx::EnumerationArray<Nbnxm::InteractionLocality, bool> haveWork = { { false } };
+    EnumerationArray<InteractionLocality, bool> haveWork = { { false } };
 };
+
+} // namespace gmx
 
 #endif /* NBNXM_SYCL_TYPES_H */

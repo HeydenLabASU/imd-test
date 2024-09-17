@@ -42,6 +42,7 @@
 
 #include "gromacs/fileio/confio.h"
 
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -51,10 +52,12 @@
 #include "gromacs/fileio/filetypes.h"
 #include "gromacs/math/vec.h"
 #include "gromacs/math/vectypes.h"
+#include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/topology/atoms.h"
 #include "gromacs/topology/symtab.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/smalloc.h"
 
@@ -85,8 +88,8 @@ public:
         testTop_ = nullptr;
         testX_   = nullptr;
         clear_mat(testBox_);
-        referenceFilename_ = fileManager_.getTemporaryFilePath(getFileSuffix("ref")).u8string();
-        testFilename_      = fileManager_.getTemporaryFilePath(getFileSuffix("test")).u8string();
+        referenceFilename_ = fileManager_.getTemporaryFilePath(getFileSuffix("ref")).string();
+        testFilename_      = fileManager_.getTemporaryFilePath(getFileSuffix("test")).string();
     }
     ~StructureIORoundtripTest() override
     {

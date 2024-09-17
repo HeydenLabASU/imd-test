@@ -45,6 +45,7 @@
 #include <cstdio>
 
 #include <algorithm>
+#include <filesystem>
 #include <memory>
 #include <vector>
 
@@ -56,12 +57,18 @@
 #include "gromacs/math/vec.h"
 #include "gromacs/mdlib/gmx_omp_nthreads.h"
 #include "gromacs/mdtypes/commrec.h"
+#include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/pbcutil/ishift.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/timing/wallcycle.h"
+#include "gromacs/topology/block.h"
+#include "gromacs/topology/forcefieldparameters.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/topology/topology_enums.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
@@ -895,9 +902,10 @@ static PbcMode getPbcMode(const t_pbc* pbcPtr)
 
 /*! \brief Executes the vsite construction task for a single thread
  *
- * \tparam        operation  Whether we are calculating positions, velocities, or both
+ * \tparam        calculatePosition  Whether we are calculating positions
+ * \tparam        calculateVelocity  Whether we are calculating velocities
  * \param[in,out] x   Coordinates to construct vsites for
- * \param[in,out] v   Velocities are generated for virtual sites if `operation` requires it
+ * \param[in,out] v   Velocities are generated for virtual sites if calculateVelocity is true
  * \param[in]     ip  Interaction parameters for all interaction, only vsite parameters are used
  * \param[in]     ilist  The interaction lists, only vsites are usesd
  * \param[in]     pbc_null  PBC struct, used for PBC distance calculations when !=nullptr
@@ -915,11 +923,7 @@ static void construct_vsites_thread(ArrayRef<RVec>                  x,
                            "Can't calculate velocities without access to velocity vector.");
     }
 
-    // Work around clang bug (unfixed as of Feb 2021)
-    // https://bugs.llvm.org/show_bug.cgi?id=35450
-    // clang-format off
-    CLANG_DIAGNOSTIC_IGNORE(-Wunused-lambda-capture)
-    // clang-format on
+    CLANG_DIAGNOSTIC_IGNORE("-Wunused-lambda-capture")
     // getVOrNull returns a velocity rvec if we need it, nullptr otherwise.
     auto getVOrNull = [v](int idx) -> real* {
         if (calculateVelocity == VSiteCalculateVelocity::Yes)
@@ -1161,10 +1165,8 @@ static void construct_vsites(const ThreadingInfo*            threadingInfo,
         /* This is wasting some CPU time as we now do this multiple times
          * per MD step.
          */
-        ivec null_ivec;
-        clear_ivec(null_ivec);
         pbc_null = set_pbc_dd(
-                &pbc, domainInfo.pbcType_, useDomdec ? domainInfo.domdec_->numCells : null_ivec, FALSE, box);
+                &pbc, domainInfo.pbcType_, useDomdec ? &domainInfo.domdec_->numCells : nullptr, FALSE, box);
     }
     else
     {
@@ -2289,7 +2291,7 @@ void VirtualSitesHandler::Impl::spreadForces(ArrayRef<const RVec> x,
          * per MD step.
          */
         pbc_null = set_pbc_dd(
-                &pbc, domainInfo_.pbcType_, useDomdec ? domainInfo_.domdec_->numCells : nullptr, FALSE, box);
+                &pbc, domainInfo_.pbcType_, useDomdec ? &domainInfo_.domdec_->numCells : nullptr, FALSE, box);
     }
     else
     {
@@ -2480,7 +2482,7 @@ void VirtualSitesHandler::Impl::spreadForces(ArrayRef<const RVec> x,
  */
 static std::vector<int> makeAtomToGroupMapping(const gmx::RangePartitioning& grouping)
 {
-    std::vector<int> atomToGroup(grouping.fullRange().end(), 0);
+    std::vector<int> atomToGroup(*grouping.fullRange().end(), 0);
 
     for (int group = 0; group < grouping.numBlocks(); group++)
     {
@@ -2909,7 +2911,7 @@ void ThreadingInfo::setVirtualSites(ArrayRef<const InteractionList> ilists,
             }
         }
         vsite_atom_range++;
-        natperthread = (vsite_atom_range + numThreads_ - 1) / numThreads_;
+        natperthread = gmx::divideRoundUp(vsite_atom_range, numThreads_);
     }
     else
     {
@@ -2921,7 +2923,7 @@ void ThreadingInfo::setVirtualSites(ArrayRef<const InteractionList> ilists,
          * threads also covers the non-local range.
          */
         vsite_atom_range = numAtoms;
-        natperthread     = (homenr + numThreads_ - 1) / numThreads_;
+        natperthread     = gmx::divideRoundUp(homenr, numThreads_);
     }
 
     if (debug)

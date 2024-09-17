@@ -36,13 +36,19 @@
 #include "pdb2gmx.h"
 
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 
 #include <algorithm>
+#include <filesystem>
+#include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "gromacs/commandline/cmdlineoptionsmodule.h"
@@ -63,28 +69,44 @@
 #include "gromacs/gmxpreprocess/ter_db.h"
 #include "gromacs/gmxpreprocess/toputil.h"
 #include "gromacs/gmxpreprocess/xlate.h"
+#include "gromacs/math/functions.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/options/basicoptions.h"
 #include "gromacs/options/filenameoption.h"
 #include "gromacs/options/ioptionscontainer.h"
 #include "gromacs/topology/atomprop.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/block.h"
 #include "gromacs/topology/index.h"
 #include "gromacs/topology/residuetypes.h"
 #include "gromacs/topology/symtab.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/filestream.h"
+#include "gromacs/utility/futil.h"
+#include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/logger.h"
 #include "gromacs/utility/loggerbuilder.h"
 #include "gromacs/utility/path.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/strdb.h"
 #include "gromacs/utility/stringutil.h"
 
 #include "hackblock.h"
 #include "resall.h"
+
+enum class PbcType : int;
+namespace gmx
+{
+class CommandLineModuleSettings;
+} // namespace gmx
 
 struct RtpRename
 {
@@ -1641,7 +1663,6 @@ private:
     real short_bond_dist_;
 
     std::string indexOutputFile_;
-    std::string outputFile_;
     std::string topologyFile_;
     std::string includeTopologyFile_;
     std::string outputConfFile_;
@@ -1991,7 +2012,7 @@ int pdb2gmx::run()
     GMX_LOG(logger.info)
             .asParagraph()
             .appendTextFormatted(
-                    "Using the %s force field in directory %s", ffname_, ffdir_.u8string().c_str());
+                    "Using the %s force field in directory %s", ffname_, ffdir_.string().c_str());
 
     choose_watermodel(c_waterTypeNames[waterType_], ffdir_, &watermodel_, logger);
 
@@ -2021,16 +2042,16 @@ int pdb2gmx::run()
     ResidueTypeMap residueTypeMap = residueTypeMapFromLibraryFile("residuetypes.dat");
 
     /* Read residue renaming database(s), if present */
-    auto rrn = fflib_search_file_end(ffdir_.u8string(), ".r2b", FALSE);
+    auto rrn = fflib_search_file_end(ffdir_.string(), ".r2b", FALSE);
 
     std::vector<RtpRename> rtprename;
     for (const auto& filename : rrn)
     {
         GMX_LOG(logger.info)
                 .asParagraph()
-                .appendTextFormatted("going to rename %s", filename.u8string().c_str());
+                .appendTextFormatted("going to rename %s", filename.string().c_str());
         FILE* fp = fflib_open(filename);
-        read_rtprename(filename.u8string().c_str(), fp, &rtprename);
+        read_rtprename(filename.string().c_str(), fp, &rtprename);
         gmx_ffclose(fp);
     }
 
@@ -2677,7 +2698,7 @@ int pdb2gmx::run()
                 suffix.append(formatString("%d", nid_used + 1));
             }
 
-            if (suffix.length() > 0)
+            if (!suffix.empty())
             {
                 molname.append(restype);
                 molname.append(suffix);
@@ -2706,7 +2727,7 @@ int pdb2gmx::run()
             posre_fn.append(".itp");
             if (posre_fn == itp_fn)
             {
-                posre_fn = gmx::concatenateBeforeExtension(posre_fn, "_pr").u8string();
+                posre_fn = gmx::concatenateBeforeExtension(posre_fn, "_pr").string();
             }
             incls_.emplace_back();
             incls_.back() = itp_fn;
@@ -2813,7 +2834,7 @@ int pdb2gmx::run()
                     "The topology file '%s' for the selected water "
                     "model '%s' can not be found in the force field "
                     "directory. Select a different water model.",
-                    waterFile.u8string().c_str(),
+                    waterFile.string().c_str(),
                     watermodel_);
             GMX_THROW(InconsistentInputError(message));
         }

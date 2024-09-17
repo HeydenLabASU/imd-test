@@ -46,13 +46,19 @@
 
 #include <cassert>
 #include <cinttypes>
+#include <cmath>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
 
 #include <algorithm>
+#include <bitset>
+#include <filesystem>
 #include <memory>
 #include <optional>
+#include <utility>
+#include <variant>
+#include <vector>
 
 #include "gromacs/commandline/filenm.h"
 #include "gromacs/domdec/builder.h"
@@ -69,6 +75,7 @@
 #include "gromacs/ewald/pme_only.h"
 #include "gromacs/ewald/pme_pp_comm_gpu.h"
 #include "gromacs/fileio/checkpoint.h"
+#include "gromacs/fileio/filetypes.h"
 #include "gromacs/fileio/gmxfio.h"
 #include "gromacs/fileio/oenv.h"
 #include "gromacs/fileio/tpxio.h"
@@ -76,7 +83,10 @@
 #include "gromacs/gmxlib/network.h"
 #include "gromacs/gmxlib/nrnb.h"
 #include "gromacs/gpu_utils/device_stream_manager.h"
+#include "gromacs/gpu_utils/gpu_utils.h"
 #include "gromacs/gpu_utils/gpueventsynchronizer_helpers.h"
+#include "gromacs/gpu_utils/hostallocator.h"
+#include "gromacs/gpu_utils/nvshmem_utils.h"
 #include "gromacs/hardware/cpuinfo.h"
 #include "gromacs/hardware/detecthardware.h"
 #include "gromacs/hardware/device_management.h"
@@ -88,11 +98,14 @@
 #include "gromacs/listed_forces/listed_forces_gpu.h"
 #include "gromacs/listed_forces/orires.h"
 #include "gromacs/math/functions.h"
+#include "gromacs/math/matrix.h"
 #include "gromacs/math/utilities.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
 #include "gromacs/mdlib/boxdeformation.h"
 #include "gromacs/mdlib/broadcaststructs.h"
 #include "gromacs/mdlib/calc_verletbuf.h"
+#include "gromacs/mdlib/constr.h"
 #include "gromacs/mdlib/dispersioncorrection.h"
 #include "gromacs/mdlib/enerdata_utils.h"
 #include "gromacs/mdlib/force.h"
@@ -118,6 +131,7 @@
 #include "gromacs/mdrunutility/multisim.h"
 #include "gromacs/mdrunutility/printtime.h"
 #include "gromacs/mdrunutility/threadaffinity.h"
+#include "gromacs/mdtypes/atominfo.h"
 #include "gromacs/mdtypes/checkpointdata.h"
 #include "gromacs/mdtypes/commrec.h"
 #include "gromacs/mdtypes/enerdata.h"
@@ -126,18 +140,21 @@
 #include "gromacs/mdtypes/group.h"
 #include "gromacs/mdtypes/inputrec.h"
 #include "gromacs/mdtypes/interaction_const.h"
+#include "gromacs/mdtypes/locality.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/mdatom.h"
 #include "gromacs/mdtypes/mdrunoptions.h"
 #include "gromacs/mdtypes/multipletimestepping.h"
 #include "gromacs/mdtypes/observableshistory.h"
 #include "gromacs/mdtypes/observablesreducer.h"
+#include "gromacs/mdtypes/pull_params.h"
 #include "gromacs/mdtypes/simulation_workload.h"
 #include "gromacs/mdtypes/state.h"
 #include "gromacs/mdtypes/state_propagator_data_gpu.h"
 #include "gromacs/modularsimulator/modularsimulator.h"
 #include "gromacs/nbnxm/gpu_data_mgmt.h"
 #include "gromacs/nbnxm/nbnxm.h"
+#include "gromacs/nbnxm/nbnxm_enums.h"
 #include "gromacs/nbnxm/pairlist_tuning.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/pulling/output.h"
@@ -155,11 +172,16 @@
 #include "gromacs/timing/gpu_timing.h"
 #include "gromacs/timing/wallcycle.h"
 #include "gromacs/timing/wallcyclereporting.h"
+#include "gromacs/timing/walltime_accounting.h"
+#include "gromacs/topology/block.h"
+#include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/topology/topology_enums.h"
 #include "gromacs/trajectory/trajectoryframe.h"
 #include "gromacs/utility/basenetwork.h"
 #include "gromacs/utility/cstringutil.h"
+#include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/filestream.h"
@@ -180,6 +202,13 @@
 #include "replicaexchange.h"
 #include "simulatorbuilder.h"
 
+class DeviceContext;
+class DeviceStream;
+struct DeviceInformation;
+struct gmx_pme_t;
+struct pull_t;
+struct t_swap;
+
 namespace gmx
 {
 
@@ -199,13 +228,15 @@ namespace gmx
  * \param[in]  pmeRunMode   Run mode indicating what resource is PME executed on.
  * \param[in]  numRanksPerSimulation   The number of ranks in each simulation.
  * \param[in]  numPmeRanksPerSimulation   The number of PME ranks in each simulation, can be -1
+ * \param[in]  gpuAwareMpiStatus  Minimum level of GPU-aware MPI support across all ranks
  * \returns                         The object populated with development feature flags.
  */
 static DevelopmentFeatureFlags manageDevelopmentFeatures(const gmx::MDLogger& mdlog,
                                                          const bool           useGpuForNonbonded,
                                                          const PmeRunMode     pmeRunMode,
                                                          const int            numRanksPerSimulation,
-                                                         const int numPmeRanksPerSimulation)
+                                                         const int numPmeRanksPerSimulation,
+                                                         gmx::GpuAwareMpiStatus gpuAwareMpiStatus)
 {
     DevelopmentFeatureFlags devFlags;
 
@@ -214,7 +245,7 @@ static DevelopmentFeatureFlags manageDevelopmentFeatures(const gmx::MDLogger& md
 
     if (getenv("GMX_CUDA_GRAPH") != nullptr)
     {
-        if (GMX_HAVE_CUDA_GRAPH_SUPPORT)
+        if (GMX_HAVE_GPU_GRAPH_SUPPORT)
         {
             devFlags.enableCudaGraphs = true;
             GMX_LOG(mdlog.warning)
@@ -227,12 +258,21 @@ static DevelopmentFeatureFlags manageDevelopmentFeatures(const gmx::MDLogger& md
         else
         {
             devFlags.enableCudaGraphs = false;
+            std::string errorReason;
+            if (GMX_GPU_CUDA)
+            {
+                errorReason = "the CUDA version in use is below the minimum requirement (11.1)";
+            }
+            else
+            {
+                errorReason = "GROMACS is built without CUDA";
+            }
             GMX_LOG(mdlog.warning)
                     .asParagraph()
-                    .appendText(
-                            "GMX_CUDA_GRAPH environment variable is detected, "
-                            "but the CUDA version in use is below the minumum requirement (11.1). "
-                            "CUDA Graphs will be disabled.");
+                    .appendTextFormatted(
+                            "GMX_CUDA_GRAPH environment variable is detected, but %s. GPU Graphs "
+                            "will be disabled.",
+                            errorReason.c_str());
         }
     }
 
@@ -247,9 +287,6 @@ static DevelopmentFeatureFlags manageDevelopmentFeatures(const gmx::MDLogger& md
     if (GMX_LIB_MPI && (GMX_GPU_CUDA || GMX_GPU_SYCL))
     {
         // Allow overriding the detection for GPU-aware MPI
-        GpuAwareMpiStatus gpuAwareMpiStatus = checkMpiCudaAwareSupport();
-        const bool        forceGpuAwareMpi  = gpuAwareMpiStatus == GpuAwareMpiStatus::Forced;
-        const bool haveDetectedGpuAwareMpi  = gpuAwareMpiStatus == GpuAwareMpiStatus::Supported;
         if (getenv("GMX_FORCE_CUDA_AWARE_MPI") != nullptr)
         {
             GMX_LOG(mdlog.warning)
@@ -259,12 +296,13 @@ static DevelopmentFeatureFlags manageDevelopmentFeatures(const gmx::MDLogger& md
                             "Please use GMX_FORCE_GPU_AWARE_MPI instead.");
         }
 
-        devFlags.canUseGpuAwareMpi = haveDetectedGpuAwareMpi || forceGpuAwareMpi;
+        devFlags.canUseGpuAwareMpi = (gpuAwareMpiStatus == gmx::GpuAwareMpiStatus::Supported
+                                      || gpuAwareMpiStatus == gmx::GpuAwareMpiStatus::Forced);
         if (getenv("GMX_ENABLE_DIRECT_GPU_COMM") != nullptr)
         {
-            if (!haveDetectedGpuAwareMpi && forceGpuAwareMpi)
+            if (gpuAwareMpiStatus == gmx::GpuAwareMpiStatus::Forced)
             {
-                // GPU-aware support not detected in MPI library but, user has forced it's use
+                // GPU-aware support not detected in MPI library but, user has forced its use
                 GMX_LOG(mdlog.warning)
                         .asParagraph()
                         .appendText(
@@ -296,7 +334,7 @@ static DevelopmentFeatureFlags manageDevelopmentFeatures(const gmx::MDLogger& md
                                 "GMX_FORCE_GPU_AWARE_MPI environment variable.");
             }
         }
-        else if (haveDetectedGpuAwareMpi)
+        else if (gpuAwareMpiStatus == gmx::GpuAwareMpiStatus::Supported)
         {
             // GPU-aware MPI was detected, let the user know that using it may improve performance
             GMX_LOG(mdlog.warning)
@@ -322,6 +360,31 @@ static DevelopmentFeatureFlags manageDevelopmentFeatures(const gmx::MDLogger& md
         }
     }
 
+    if (getenv("GMX_ENABLE_NVSHMEM") != nullptr)
+    {
+        if (GMX_LIB_MPI && GMX_NVSHMEM)
+        {
+            devFlags.enableNvshmem = true;
+            GMX_LOG(mdlog.warning)
+                    .asParagraph()
+                    .appendText(
+                            "GMX_ENABLE_NVSHMEM environment variable is detected. "
+                            "The experimental NVSHMEM feature will be used if run conditions "
+                            "allow.");
+        }
+        else
+        {
+            devFlags.enableNvshmem = false;
+            GMX_LOG(mdlog.warning)
+                    .asParagraph()
+                    .appendText(
+                            "GMX_ENABLE_NVSHMEM environment variable is detected, "
+                            "but GROMACS was built without NVSHMEM support. "
+                            "Direct use of NVSHMEM will be disabled. "
+                            "NVSHMEM may still be used indirectly if cuFFTMp is enabled. ");
+        }
+    }
+
     if (devFlags.enableGpuBufferOps)
     {
         GMX_LOG(mdlog.warning)
@@ -331,8 +394,8 @@ static DevelopmentFeatureFlags manageDevelopmentFeatures(const gmx::MDLogger& md
                         "GMX_USE_GPU_BUFFER_OPS environment variable.");
     }
 
-    // PME decomposition is supported only with CUDA-backend in mixed mode
-    // CUDA-backend also needs GPU-aware MPI support for decomposition to work
+    // PME decomposition is supported only with CUDA or SYCL and also
+    // needs GPU-aware MPI support for it to work.
     const bool pmeGpuDecompositionRequested =
             (pmeRunMode == PmeRunMode::GPU || pmeRunMode == PmeRunMode::Mixed)
             && ((numRanksPerSimulation > 1 && numPmeRanksPerSimulation == 0)
@@ -535,8 +598,14 @@ static void prepare_verlet_scheme(FILE*                          fplog,
                 (makeGpuPairList ? ListSetupType::Gpu : ListSetupType::CpuSimdWhenSupported);
         VerletbufListSetup listSetup = verletbufGetSafeListSetup(listType);
 
-        const real rlist_new = calcVerletBufferSize(
-                mtop, effectiveAtomDensity.value(), *ir, -1, ir->nstlist, ir->nstlist - 1, -1, listSetup);
+        const real rlist_new = calcVerletBufferSize(mtop,
+                                                    effectiveAtomDensity.value(),
+                                                    *ir,
+                                                    ir->verletBufferPressureTolerance,
+                                                    ir->nstlist,
+                                                    ir->nstlist - 1,
+                                                    -1,
+                                                    listSetup);
 
         if (rlist_new != ir->rlist)
         {
@@ -588,7 +657,7 @@ static void override_nsteps_cmdline(const gmx::MDLogger& mdlog, int64_t nsteps_c
             sprintf(sbuf_msg,
                     "Overriding nsteps with value passed on the command line: %s steps, %.3g ps",
                     gmx_step_str(nsteps_cmdline, sbuf_steps),
-                    fabs(nsteps_cmdline * ir->delta_t));
+                    std::fabs(nsteps_cmdline * ir->delta_t));
         }
         else
         {
@@ -647,7 +716,7 @@ static bool gpuAccelerationOfNonbondedIsUseful(const MDLogger&   mdlog,
         gpuIsUseful = false;
         warning     = gmx::formatString(
                 "Multiple time stepping is only supported with GPUs when MTS is only applied to %s "
-                "forces.",
+                    "forces.",
                 mtsForceGroupNames[MtsForceGroups::LongrangeNonbonded].c_str());
     }
 
@@ -807,7 +876,7 @@ static void finish_run(FILE*                     fplog,
     if (printReport)
     {
         auto* nbnxn_gpu_timings =
-                (nbv != nullptr && nbv->useGpu()) ? Nbnxm::gpu_get_timings(nbv->gpu_nbv) : nullptr;
+                (nbv != nullptr && nbv->useGpu()) ? gpu_get_timings(nbv->gpuNbv()) : nullptr;
         gmx_wallclock_gpu_pme_t pme_gpu_timings = {};
 
         if (pme_gpu_task_enabled(pme))
@@ -966,6 +1035,7 @@ int Mdrunner::mdrunner()
                     emulateGpuNonbonded,
                     canUseGpuForNonbonded,
                     gpuAccelerationOfNonbondedIsUseful(mdlog, *inputrec, GMX_THREAD_MPI, doRerun),
+                    mdrunOptions.reproducible,
                     hw_opt.nthreads_tmpi);
             useGpuForPme = decideWhetherToUseGpusForPmeWithThreadMpi(useGpuForNonbonded,
                                                                      pmeTarget,
@@ -1045,6 +1115,7 @@ int Mdrunner::mdrunner()
                 emulateGpuNonbonded,
                 canUseGpuForNonbonded,
                 gpuAccelerationOfNonbondedIsUseful(mdlog, *inputrec, !GMX_THREAD_MPI, doRerun),
+                mdrunOptions.reproducible,
                 gpusWereDetected);
         useGpuForPme    = decideWhetherToUseGpusForPme(useGpuForNonbonded,
                                                     pmeTarget,
@@ -1063,8 +1134,17 @@ int Mdrunner::mdrunner()
 
     // Initialize development feature flags that enabled by environment variable
     // and report those features that are enabled.
-    const DevelopmentFeatureFlags devFlags = manageDevelopmentFeatures(
-            mdlog, useGpuForNonbonded, pmeRunMode, cr->sizeOfDefaultCommunicator, domdecOptions.numPmeRanks);
+    // We are using the minimal supported level of GPU-aware MPI
+    // support as an approximation of whether such communication
+    // will work. It likely would not work in cases where ranks
+    // have heterogeneous device types or vendors unless the MPI
+    // library supported that.
+    const DevelopmentFeatureFlags devFlags = manageDevelopmentFeatures(mdlog,
+                                                                       useGpuForNonbonded,
+                                                                       pmeRunMode,
+                                                                       cr->sizeOfDefaultCommunicator,
+                                                                       domdecOptions.numPmeRanks,
+                                                                       hwinfo_->minGpuAwareMpiStatus);
 
     const bool useModularSimulator = checkUseModularSimulator(false,
                                                               inputrec.get(),
@@ -1133,10 +1213,17 @@ int Mdrunner::mdrunner()
         setupNotifier.notify(*inputrec->internalParameters);
     }
 
-    // Let MdModules know the .tpr filename
+    // Let MdModules know the .tpr input and .edr output filenames
     {
         gmx::MdRunInputFilename mdRunInputFilename = { ftp2fn(efTPR, filenames.size(), filenames.data()) };
         setupNotifier.notify(mdRunInputFilename);
+        gmx::EdrOutputFilename edrOutputFilename = { ftp2fn(efEDR, filenames.size(), filenames.data()) };
+        setupNotifier.notify(edrOutputFilename);
+        // this will be uncommented in !4367
+        // const char* plumedFname = opt2fn("-plumed", filenames.size(), filenames.data());
+        // gmx::PlumedFilename plumedFilename{ plumedFname ? std::string{plumedFname} : std::nullopt
+        // };
+        // setupNotifier.notify(plumedFilename);
     }
 
     if (fplog != nullptr)
@@ -1148,7 +1235,7 @@ int Mdrunner::mdrunner()
     if (SIMMAIN(cr))
     {
         /* In rerun, set velocities to zero if present */
-        if (doRerun && ((globalState->flags & enumValueToBitMask(StateEntry::V)) != 0))
+        if (doRerun && globalState->hasEntry(StateEntry::V))
         {
             // rerun does not use velocities
             GMX_LOG(mdlog.info)
@@ -1156,11 +1243,11 @@ int Mdrunner::mdrunner()
                     .appendText(
                             "Rerun trajectory contains velocities. Rerun does only evaluate "
                             "potential energy and forces. The velocities will be ignored.");
-            for (int i = 0; i < globalState->natoms; i++)
+            for (int i = 0; i < globalState->numAtoms(); i++)
             {
                 clear_rvec(globalState->v[i]);
             }
-            globalState->flags &= ~enumValueToBitMask(StateEntry::V);
+            globalState->setFlags(globalState->flags() & ~enumValueToBitMask(StateEntry::V));
         }
 
         /* now make sure the state is initialized and propagated */
@@ -1492,8 +1579,12 @@ int Mdrunner::mdrunner()
 
     // Get the device handle for the modules on this rank, nullptr
     // when no task is assigned.
-    int                deviceId   = -1;
-    DeviceInformation* deviceInfo = gpuTaskAssignments.initDevice(&deviceId);
+    DeviceInformation* deviceInfo = gpuTaskAssignments.initDevice();
+
+    // We will later get the pairlist type from the device information here, for now we hard code it.
+    const auto pairlistType = PairlistType::Hierarchical8x8x8;
+    GMX_RELEASE_ASSERT(sc_gpuClusterSize(pairlistType) >= 4,
+                       "The verlet scheme setup relies on the GPU cluster size to be at least 4");
 
     // TODO Currently this is always built, yet DD partition code
     // checks if it is built before using it. Probably it should
@@ -1516,7 +1607,10 @@ int Mdrunner::mdrunner()
         localState         = localStateInstance.get();
         // TODO Pass the GPU streams to ddBuilder to use in buffer
         // transfers (e.g. halo exchange)
-        cr->setDD(ddBuilder->build(&atomSets, localTopology, *localState, &observablesReducerBuilder));
+        cr->setDD(ddBuilder->build(&atomSets,
+                                   localTopology,
+                                   EI_ENERGY_MINIMIZATION(inputrec->eI) ? nullptr : localState,
+                                   &observablesReducerBuilder));
         // The builder's job is done, so destruct it
         ddBuilder.reset(nullptr);
         // Note that local state still does not exist yet.
@@ -1581,7 +1675,7 @@ int Mdrunner::mdrunner()
     if (runScheduleWork.simulationWork.useGpuDirectCommunication && GMX_GPU_CUDA)
     {
         // Don't enable event counting with GPU Direct comm, see #3988.
-        gmx::internal::disableCudaEventConsumptionCounting();
+        gmx::internal::disableGpuEventConsumptionCounting();
     }
 
     if (isSimulationMainRank && GMX_GPU_SYCL)
@@ -1610,7 +1704,7 @@ int Mdrunner::mdrunner()
     {
         if (runScheduleWork.simulationWork.havePpDomainDecomposition && thisRankHasDuty(cr, DUTY_PP))
         {
-            dd_setup_dlb_resource_sharing(cr, deviceId);
+            dd_setup_dlb_resource_sharing(cr, uniqueDeviceId(*deviceInfo));
         }
         const bool useGpuTiming = decideGpuTimingsUsage();
         deviceStreamManager     = std::make_unique<DeviceStreamManager>(
@@ -1747,6 +1841,9 @@ int Mdrunner::mdrunner()
         setupNotifier.notify(mtop);
         setupNotifier.notify(inputrec->pbcType);
         setupNotifier.notify(SimulationTimeStep{ inputrec->delta_t });
+        setupNotifier.notify(startingBehavior);
+        setupNotifier.notify(EnsembleTemperature{ *inputrec });
+
         /* Initiate forcerecord */
         fr                 = std::make_unique<t_forcerec>();
         fr->forceProviders = mdModules_->initForceProviders();
@@ -1797,34 +1894,35 @@ int Mdrunner::mdrunner()
                     cr->dd->pme_nodeid,
                     &cr->dd->pmeForceReceiveBuffer,
                     deviceStreamManager->context(),
-                    deviceStreamManager->stream(DeviceStreamType::PmePpTransfer));
+                    deviceStreamManager->stream(DeviceStreamType::PmePpTransfer),
+                    runScheduleWork.simulationWork.useNvshmem);
         }
 
-        fr->nbv = Nbnxm::init_nb_verlet(
-                mdlog,
-                *inputrec,
-                *fr,
-                cr,
-                *hwinfo_,
-                runScheduleWork.simulationWork.useGpuNonbonded,
-                deviceStreamManager.get(),
-                mtop,
-                PAR(cr) ? &observablesReducerBuilder : nullptr,
-                isSimulationMainRank ? globalState->x : gmx::ArrayRef<const gmx::RVec>(),
-                box,
-                wcycle.get());
+        fr->nbv = init_nb_verlet(mdlog,
+                                 *inputrec,
+                                 *fr,
+                                 cr,
+                                 *hwinfo_,
+                                 runScheduleWork.simulationWork.useGpuNonbonded,
+                                 deviceStreamManager.get(),
+                                 mtop,
+                                 PAR(cr) ? &observablesReducerBuilder : nullptr,
+                                 isSimulationMainRank ? globalState->x : gmx::ArrayRef<const gmx::RVec>(),
+                                 box,
+                                 wcycle.get());
         // TODO: Move the logic below to a GPU bonded builder
         if (runScheduleWork.simulationWork.useGpuBonded)
         {
             GMX_RELEASE_ASSERT(deviceStreamManager != nullptr,
                                "GPU device stream manager should be valid in order to use GPU "
                                "version of bonded forces.");
-            fr->listedForcesGpu = std::make_unique<ListedForcesGpu>(mtop.ffparams,
-                                                                    fr->ic->epsfac * fr->fudgeQQ,
-                                                                    *deviceInfo,
-                                                                    deviceStreamManager->context(),
-                                                                    deviceStreamManager->bondedStream(),
-                                                                    wcycle.get());
+            fr->listedForcesGpu =
+                    std::make_unique<ListedForcesGpu>(mtop.ffparams,
+                                                      fr->ic->epsfac * fr->fudgeQQ,
+                                                      inputrec->opts.ngener - inputrec->nwall,
+                                                      deviceStreamManager->context(),
+                                                      deviceStreamManager->bondedStream(),
+                                                      wcycle.get());
         }
         fr->longRangeNonbondeds = std::make_unique<CpuPpLongRangeNonbondeds>(fr->n_tpi,
                                                                              fr->ic->ewaldcoeff_q,
@@ -1867,7 +1965,14 @@ int Mdrunner::mdrunner()
             /* Make molecules whole at start of run */
             if (fr->pbcType != PbcType::No)
             {
-                do_pbc_first_mtop(fplog, inputrec->pbcType, box, &mtop, globalState->x.rvec_array());
+                do_pbc_first_mtop(fplog,
+                                  inputrec->pbcType,
+                                  ir_haveBoxDeformation(*inputrec),
+                                  inputrec->deform,
+                                  box,
+                                  &mtop,
+                                  globalState->x,
+                                  globalState->v);
             }
             if (vsite)
             {
@@ -1895,7 +2000,7 @@ int Mdrunner::mdrunner()
         /* This is a PME only node */
 
         GMX_ASSERT(globalState == nullptr,
-                   "We don't need the state on a PME only rank and expect it to be unitialized");
+                   "We don't need the state on a PME only rank and expect it to be uninitialized");
 
         ewaldcoeff_q  = calc_ewaldcoeff_q(inputrec->rcoulomb, inputrec->ewald_rtol);
         ewaldcoeff_lj = calc_ewaldcoeff_lj(inputrec->rvdw, inputrec->ewald_rtol_lj);
@@ -1965,6 +2070,7 @@ int Mdrunner::mdrunner()
                                  : nullptr;
 
                 const t_inputrec* ir = inputrec.get();
+                GMX_LOG(mdlog.warning).asParagraph().appendTextFormatted("IMD version: %d\n", ir->imd->imdversion);
                 /* For each atom we allow a relative (cut-off) error of up to ewald_rtol.
                  * Thus we can also tolerate an error of an order of magnitude less due to
                  * atoms being slightly outside the halo extent. This will only cause a fraction
@@ -1994,10 +2100,17 @@ int Mdrunner::mdrunner()
                                        deviceContext,
                                        pmeStream,
                                        pmeGpuProgram.get(),
-                                       mdlog);
+                                       mdlog,
+                                       nullptr);
             }
             GMX_CATCH_ALL_AND_EXIT_WITH_FATAL_ERROR
         }
+    }
+
+    std::unique_ptr<gmxNvshmemHandle> nvshmemHandlePtr;
+    if (runScheduleWork.simulationWork.useNvshmem)
+    {
+        nvshmemHandlePtr = std::make_unique<gmxNvshmemHandle>(cr->mpiDefaultCommunicator);
     }
 
     /* Set thread affinity after gmx_pme_init(), otherwise with cuFFTMp the NVSHMEM helper thread
@@ -2037,305 +2150,328 @@ int Mdrunner::mdrunner()
         signal_handler_install();
     }
 
-    pull_t* pull_work = nullptr;
-    if (thisRankHasDuty(cr, DUTY_PP))
+    try
     {
-        /* Assumes uniform use of the number of OpenMP threads */
-        walltime_accounting = walltime_accounting_init(gmx_omp_nthreads_get(ModuleMultiThread::Default));
-
-        if (inputrec->bPull)
+        pull_t* pull_work = nullptr;
+        if (thisRankHasDuty(cr, DUTY_PP))
         {
-            /* Initialize pull code */
-            pull_work = init_pull(fplog,
-                                  inputrec->pull.get(),
-                                  inputrec.get(),
-                                  mtop,
-                                  cr,
-                                  &atomSets,
-                                  inputrec->fepvals->init_lambda);
-            if (inputrec->pull->bXOutAverage || inputrec->pull->bFOutAverage)
+            /* Assumes uniform use of the number of OpenMP threads */
+            walltime_accounting =
+                    walltime_accounting_init(gmx_omp_nthreads_get(ModuleMultiThread::Default));
+
+            if (inputrec->bPull)
             {
-                initPullHistory(pull_work, &observablesHistory);
-            }
-            if (EI_DYNAMICS(inputrec->eI) && MAIN(cr))
-            {
-                init_pull_output_files(pull_work, filenames.size(), filenames.data(), oenv, startingBehavior);
-            }
-        }
-
-        std::unique_ptr<EnforcedRotation> enforcedRotation;
-        if (inputrec->bRot)
-        {
-            /* Initialize enforced rotation code */
-            enforcedRotation = init_rot(fplog,
-                                        inputrec.get(),
-                                        filenames.size(),
-                                        filenames.data(),
-                                        cr,
-                                        &atomSets,
-                                        globalState.get(),
-                                        mtop,
-                                        oenv,
-                                        mdrunOptions,
-                                        startingBehavior);
-        }
-
-        t_swap* swap = nullptr;
-        if (inputrec->eSwapCoords != SwapType::No)
-        {
-            /* Initialize ion swapping code */
-            swap = init_swapcoords(fplog,
-                                   inputrec.get(),
-                                   opt2fn_main("-swap", filenames.size(), filenames.data(), cr),
-                                   mtop,
-                                   globalState.get(),
-                                   &observablesHistory,
-                                   cr,
-                                   &atomSets,
-                                   oenv,
-                                   mdrunOptions,
-                                   startingBehavior);
-        }
-
-        /* Let makeConstraints know whether we have essential dynamics constraints. */
-        auto constr = makeConstraints(mtop,
-                                      *inputrec,
-                                      pull_work,
-                                      pull_work != nullptr ? pull_have_constraint(*pull_work) : false,
-                                      doEssentialDynamics,
-                                      fplog,
+                /* Initialize pull code */
+                pull_work = init_pull(fplog,
+                                      inputrec->pull.get(),
+                                      inputrec.get(),
+                                      mtop,
                                       cr,
-                                      updateGroups.useUpdateGroups(),
-                                      ms,
-                                      &nrnb,
-                                      wcycle.get(),
-                                      fr->bMolPBC,
-                                      PAR(cr) ? &observablesReducerBuilder : nullptr);
-
-        /* Energy terms and groups */
-        gmx_enerdata_t enerd(mtop.groups.groups[SimulationAtomGroupType::EnergyOutput].size(),
-                             &inputrec->fepvals->all_lambda);
-
-        // cos acceleration is only supported by md, but older tpr
-        // files might still combine it with other integrators
-        GMX_RELEASE_ASSERT(inputrec->cos_accel == 0.0 || inputrec->eI == IntegrationAlgorithm::MD,
-                           "cos_acceleration is only supported by integrator=md");
-
-        /* Kinetic energy data */
-        gmx_ekindata_t ekind(gmx::constArrayRefFromArray(inputrec->opts.ref_t, inputrec->opts.ngtc),
-                             inputrec->ensembleTemperatureSetting,
-                             inputrec->ensembleTemperature,
-                             inputrec->cos_accel,
-                             gmx_omp_nthreads_get(ModuleMultiThread::Update));
-
-        /* Set up interactive MD (IMD) */
-        auto imdSession = makeImdSession(inputrec.get(),
-                                         cr,
-                                         wcycle.get(),
-                                         &enerd,
-                                         ms,
-                                         mtop,
-                                         mdlog,
-                                         MAIN(cr) ? globalState->x : gmx::ArrayRef<gmx::RVec>(),
-                                         filenames.size(),
-                                         filenames.data(),
-                                         oenv,
-                                         mdrunOptions.imdOptions,
-                                         startingBehavior);
-
-        if (haveDDAtomOrdering(*cr))
-        {
-            GMX_RELEASE_ASSERT(fr, "fr was NULL while cr->duty was DUTY_PP");
-            /* This call is not included in init_domain_decomposition
-             * because fr->atomInfoForEachMoleculeBlock is set later.
-             */
-            makeBondedLinks(cr->dd, mtop, fr->atomInfoForEachMoleculeBlock);
-        }
-
-        if (runScheduleWork.simulationWork.useGpuFBufferOps)
-        {
-            fr->gpuForceReduction[gmx::AtomLocality::Local] = std::make_unique<gmx::GpuForceReduction>(
-                    deviceStreamManager->context(),
-                    deviceStreamManager->stream(gmx::DeviceStreamType::NonBondedLocal),
-                    wcycle.get());
-            fr->gpuForceReduction[gmx::AtomLocality::NonLocal] = std::make_unique<gmx::GpuForceReduction>(
-                    deviceStreamManager->context(),
-                    deviceStreamManager->stream(gmx::DeviceStreamType::NonBondedNonLocal),
-                    wcycle.get());
-
-            if (runScheduleWork.simulationWork.useMdGpuGraph)
-            {
-                fr->mdGraph[MdGraphEvenOrOddStep::EvenStep] =
-                        std::make_unique<gmx::MdGpuGraph>(*fr->deviceStreamManager,
-                                                          runScheduleWork.simulationWork,
-                                                          cr->mpi_comm_mygroup,
-                                                          MdGraphEvenOrOddStep::EvenStep,
-                                                          wcycle.get());
-
-                fr->mdGraph[MdGraphEvenOrOddStep::OddStep] =
-                        std::make_unique<gmx::MdGpuGraph>(*fr->deviceStreamManager,
-                                                          runScheduleWork.simulationWork,
-                                                          cr->mpi_comm_mygroup,
-                                                          MdGraphEvenOrOddStep::OddStep,
-                                                          wcycle.get());
-
-                fr->mdGraph[MdGraphEvenOrOddStep::EvenStep]->setAlternateStepPpTaskCompletionEvent(
-                        fr->mdGraph[MdGraphEvenOrOddStep::OddStep]->getPpTaskCompletionEvent());
-                fr->mdGraph[MdGraphEvenOrOddStep::OddStep]->setAlternateStepPpTaskCompletionEvent(
-                        fr->mdGraph[MdGraphEvenOrOddStep::EvenStep]->getPpTaskCompletionEvent());
+                                      &atomSets,
+                                      inputrec->fepvals->init_lambda_without_states);
+                if (inputrec->pull->bXOutAverage || inputrec->pull->bFOutAverage)
+                {
+                    initPullHistory(pull_work, &observablesHistory);
+                }
+                if (EI_DYNAMICS(inputrec->eI) && MAIN(cr))
+                {
+                    init_pull_output_files(
+                            pull_work, filenames.size(), filenames.data(), oenv, startingBehavior);
+                }
             }
-        }
 
-        std::unique_ptr<gmx::StatePropagatorDataGpu> stateGpu;
-        if (gpusWereDetected && gmx::needStateGpu(runScheduleWork.simulationWork))
+            std::unique_ptr<EnforcedRotation> enforcedRotation;
+            if (inputrec->bRot)
+            {
+                /* Initialize enforced rotation code */
+                enforcedRotation = init_rot(fplog,
+                                            inputrec.get(),
+                                            filenames.size(),
+                                            filenames.data(),
+                                            cr,
+                                            &atomSets,
+                                            globalState.get(),
+                                            mtop,
+                                            oenv,
+                                            mdrunOptions,
+                                            startingBehavior);
+            }
+
+            t_swap* swap = nullptr;
+            if (inputrec->eSwapCoords != SwapType::No)
+            {
+                /* Initialize ion swapping code */
+                swap = init_swapcoords(fplog,
+                                       inputrec.get(),
+                                       opt2fn_main("-swap", filenames.size(), filenames.data(), cr),
+                                       mtop,
+                                       globalState.get(),
+                                       &observablesHistory,
+                                       cr,
+                                       &atomSets,
+                                       oenv,
+                                       mdrunOptions,
+                                       startingBehavior);
+            }
+
+            /* Let makeConstraints know whether we have essential dynamics constraints. */
+            auto constr = makeConstraints(mtop,
+                                          *inputrec,
+                                          pull_work,
+                                          pull_work != nullptr ? pull_have_constraint(*pull_work) : false,
+                                          doEssentialDynamics,
+                                          fplog,
+                                          cr,
+                                          updateGroups.useUpdateGroups(),
+                                          ms,
+                                          &nrnb,
+                                          wcycle.get(),
+                                          fr->bMolPBC,
+                                          PAR(cr) ? &observablesReducerBuilder : nullptr);
+
+            /* Energy terms and groups */
+            gmx_enerdata_t enerd(mtop.groups.groups[SimulationAtomGroupType::EnergyOutput].size(),
+                                 &inputrec->fepvals->all_lambda);
+
+            // cos acceleration is only supported by md, but older tpr
+            // files might still combine it with other integrators
+            GMX_RELEASE_ASSERT(inputrec->cos_accel == 0.0 || inputrec->eI == IntegrationAlgorithm::MD,
+                               "cos_acceleration is only supported by integrator=md");
+
+            /* Kinetic energy data */
+            gmx_ekindata_t ekind(gmx::constArrayRefFromArray(inputrec->opts.ref_t, inputrec->opts.ngtc),
+                                 inputrec->ensembleTemperatureSetting,
+                                 inputrec->ensembleTemperature,
+                                 fr->haveBoxDeformation,
+                                 inputrec->cos_accel,
+                                 gmx_omp_nthreads_get(ModuleMultiThread::Update));
+
+            GMX_LOG(mdlog.warning)
+                    .asParagraph()
+                    .appendTextFormatted("pre-makeimdsesssion version: %d", inputrec.get()->imd->imdversion);
+            /* Set up interactive MD (IMD) */
+            auto imdSession = makeImdSession(inputrec.get(),
+                                             cr,
+                                             wcycle.get(),
+                                             &enerd,
+                                             ms,
+                                             mtop,
+                                             mdlog,
+                                             MAIN(cr) ? globalState->x : gmx::ArrayRef<gmx::RVec>(),
+                                             filenames.size(),
+                                             filenames.data(),
+                                             oenv,
+                                             mdrunOptions.imdOptions,
+                                             startingBehavior);
+
+            if (haveDDAtomOrdering(*cr))
+            {
+                GMX_RELEASE_ASSERT(fr, "fr was NULL while cr->duty was DUTY_PP");
+                /* This call is not included in init_domain_decomposition
+                 * because fr->atomInfoForEachMoleculeBlock is set later.
+                 */
+                makeBondedLinks(cr->dd, mtop, fr->atomInfoForEachMoleculeBlock);
+            }
+
+            if (runScheduleWork.simulationWork.useGpuFBufferOpsWhenAllowed)
+            {
+                fr->gpuForceReduction[gmx::AtomLocality::Local] = std::make_unique<gmx::GpuForceReduction>(
+                        deviceStreamManager->context(),
+                        deviceStreamManager->stream(gmx::DeviceStreamType::NonBondedLocal),
+                        wcycle.get());
+
+                if (runScheduleWork.simulationWork.havePpDomainDecomposition)
+                {
+                    fr->gpuForceReduction[gmx::AtomLocality::NonLocal] =
+                            std::make_unique<gmx::GpuForceReduction>(
+                                    deviceStreamManager->context(),
+                                    deviceStreamManager->stream(gmx::DeviceStreamType::NonBondedNonLocal),
+                                    wcycle.get());
+                }
+
+                if (runScheduleWork.simulationWork.useMdGpuGraph)
+                {
+                    fr->mdGraph[MdGraphEvenOrOddStep::EvenStep] =
+                            std::make_unique<gmx::MdGpuGraph>(*fr->deviceStreamManager,
+                                                              runScheduleWork.simulationWork,
+                                                              cr->mpi_comm_mygroup,
+                                                              MdGraphEvenOrOddStep::EvenStep,
+                                                              wcycle.get());
+
+                    fr->mdGraph[MdGraphEvenOrOddStep::OddStep] =
+                            std::make_unique<gmx::MdGpuGraph>(*fr->deviceStreamManager,
+                                                              runScheduleWork.simulationWork,
+                                                              cr->mpi_comm_mygroup,
+                                                              MdGraphEvenOrOddStep::OddStep,
+                                                              wcycle.get());
+
+                    fr->mdGraph[MdGraphEvenOrOddStep::EvenStep]->setAlternateStepPpTaskCompletionEvent(
+                            fr->mdGraph[MdGraphEvenOrOddStep::OddStep]->getPpTaskCompletionEvent());
+                    fr->mdGraph[MdGraphEvenOrOddStep::OddStep]->setAlternateStepPpTaskCompletionEvent(
+                            fr->mdGraph[MdGraphEvenOrOddStep::EvenStep]->getPpTaskCompletionEvent());
+                }
+            }
+
+            std::unique_ptr<gmx::StatePropagatorDataGpu> stateGpu;
+            if (gpusWereDetected && gmx::needStateGpu(runScheduleWork.simulationWork))
+            {
+                GpuApiCallBehavior transferKind =
+                        (inputrec->eI == IntegrationAlgorithm::MD && !doRerun && !useModularSimulator)
+                                ? GpuApiCallBehavior::Async
+                                : GpuApiCallBehavior::Sync;
+                GMX_RELEASE_ASSERT(deviceStreamManager != nullptr,
+                                   "GPU device stream manager should be initialized to use GPU.");
+                stateGpu = std::make_unique<gmx::StatePropagatorDataGpu>(
+                        *deviceStreamManager, transferKind, pme_gpu_get_block_size(fr->pmedata), wcycle.get());
+                fr->stateGpu = stateGpu.get();
+            }
+
+            GMX_ASSERT(stopHandlerBuilder_, "Runner must provide StopHandlerBuilder to simulator.");
+            SimulatorBuilder simulatorBuilder;
+
+            simulatorBuilder.add(SimulatorStateData(
+                    globalState.get(), localState, &observablesHistory, &enerd, &ekind));
+            simulatorBuilder.add(std::move(membedHolder));
+            simulatorBuilder.add(std::move(stopHandlerBuilder_));
+            simulatorBuilder.add(SimulatorConfig(mdrunOptions, startingBehavior, &runScheduleWork));
+
+
+            simulatorBuilder.add(SimulatorEnv(fplog, cr, ms, mdlog, oenv, &observablesReducerBuilder));
+            simulatorBuilder.add(Profiling(&nrnb, walltime_accounting, wcycle.get()));
+            simulatorBuilder.add(ConstraintsParam(
+                    constr.get(),
+                    enforcedRotation ? enforcedRotation->getLegacyEnfrot() : nullptr,
+                    vsite.get()));
+            // TODO: Separate `fr` to a separate add, and make the `build` handle the coupling sensibly.
+            simulatorBuilder.add(LegacyInput(
+                    static_cast<int>(filenames.size()), filenames.data(), inputrec.get(), fr.get()));
+            simulatorBuilder.add(ReplicaExchangeParameters(replExParams));
+            simulatorBuilder.add(InteractiveMD(imdSession.get()));
+            simulatorBuilder.add(SimulatorModules(mdModules_->outputProvider(), mdModules_->notifiers()));
+            simulatorBuilder.add(CenterOfMassPulling(pull_work));
+            // Todo move to an MDModule
+            simulatorBuilder.add(IonSwapping(swap));
+            simulatorBuilder.add(TopologyData(mtop, &localTopology, mdAtoms.get()));
+            simulatorBuilder.add(BoxDeformationHandle(deform.get()));
+            simulatorBuilder.add(std::move(modularSimulatorCheckpointData));
+
+            // build and run simulator object based on user-input
+            auto simulator = simulatorBuilder.build(useModularSimulator);
+            simulator->run();
+
+            if (fr->pmePpCommGpu)
+            {
+                // destroy object since it is no longer required. (This needs to be done while the GPU context still exists.)
+                fr->pmePpCommGpu.reset();
+            }
+
+            if (inputrec->bPull)
+            {
+                finish_pull(pull_work);
+            }
+            finish_swapcoords(swap);
+        }
+        else
         {
-            GpuApiCallBehavior transferKind =
-                    (inputrec->eI == IntegrationAlgorithm::MD && !doRerun && !useModularSimulator)
-                            ? GpuApiCallBehavior::Async
-                            : GpuApiCallBehavior::Sync;
-            GMX_RELEASE_ASSERT(deviceStreamManager != nullptr,
-                               "GPU device stream manager should be initialized to use GPU.");
-            stateGpu = std::make_unique<gmx::StatePropagatorDataGpu>(
-                    *deviceStreamManager, transferKind, pme_gpu_get_block_size(fr->pmedata), wcycle.get());
-            fr->stateGpu = stateGpu.get();
+            GMX_RELEASE_ASSERT(pmedata, "pmedata was NULL while cr->duty was not DUTY_PP");
+            /* do PME only */
+            walltime_accounting = walltime_accounting_init(gmx_omp_nthreads_get(ModuleMultiThread::Pme));
+            gmx_pmeonly(&pmedata,
+                        cr,
+                        &nrnb,
+                        wcycle.get(),
+                        walltime_accounting,
+                        inputrec.get(),
+                        pmeRunMode,
+                        runScheduleWork.simulationWork.useGpuPmePpCommunication,
+                        runScheduleWork.simulationWork.useNvshmem,
+                        deviceStreamManager.get());
         }
 
-        GMX_ASSERT(stopHandlerBuilder_, "Runner must provide StopHandlerBuilder to simulator.");
-        SimulatorBuilder simulatorBuilder;
-
-        simulatorBuilder.add(SimulatorStateData(
-                globalState.get(), localState, &observablesHistory, &enerd, &ekind));
-        simulatorBuilder.add(std::move(membedHolder));
-        simulatorBuilder.add(std::move(stopHandlerBuilder_));
-        simulatorBuilder.add(SimulatorConfig(mdrunOptions, startingBehavior, &runScheduleWork));
-
-
-        simulatorBuilder.add(SimulatorEnv(fplog, cr, ms, mdlog, oenv, &observablesReducerBuilder));
-        simulatorBuilder.add(Profiling(&nrnb, walltime_accounting, wcycle.get()));
-        simulatorBuilder.add(ConstraintsParam(
-                constr.get(), enforcedRotation ? enforcedRotation->getLegacyEnfrot() : nullptr, vsite.get()));
-        // TODO: Separate `fr` to a separate add, and make the `build` handle the coupling sensibly.
-        simulatorBuilder.add(LegacyInput(
-                static_cast<int>(filenames.size()), filenames.data(), inputrec.get(), fr.get()));
-        simulatorBuilder.add(ReplicaExchangeParameters(replExParams));
-        simulatorBuilder.add(InteractiveMD(imdSession.get()));
-        simulatorBuilder.add(SimulatorModules(mdModules_->outputProvider(), mdModules_->notifiers()));
-        simulatorBuilder.add(CenterOfMassPulling(pull_work));
-        // Todo move to an MDModule
-        simulatorBuilder.add(IonSwapping(swap));
-        simulatorBuilder.add(TopologyData(mtop, &localTopology, mdAtoms.get()));
-        simulatorBuilder.add(BoxDeformationHandle(deform.get()));
-        simulatorBuilder.add(std::move(modularSimulatorCheckpointData));
-
-        // build and run simulator object based on user-input
-        auto simulator = simulatorBuilder.build(useModularSimulator);
-        simulator->run();
-
-        if (fr->pmePpCommGpu)
+        if (!hwinfo_->deviceInfoList.empty())
         {
-            // destroy object since it is no longer required. (This needs to be done while the GPU context still exists.)
-            fr->pmePpCommGpu.reset();
+            /* stop the GPU profiler (only CUDA);
+             * Doing so here avoids including a lot of cleanup/freeing API calls in the trace. */
+            stopGpuProfiler();
         }
 
-        if (inputrec->bPull)
+        wallcycle_stop(wcycle.get(), WallCycleCounter::Run);
+
+        /* Finish up, write some stuff
+         * if rerunMD, don't write last frame again
+         */
+        finish_run(fplog,
+                   mdlog,
+                   cr,
+                   *inputrec,
+                   &nrnb,
+                   wcycle.get(),
+                   walltime_accounting,
+                   fr ? fr->nbv.get() : nullptr,
+                   pmedata,
+                   EI_DYNAMICS(inputrec->eI) && !isMultiSim(ms));
+    }
+    GMX_CATCH_ALL_AND_EXIT_WITH_FATAL_ERROR
+
+    try
+    {
+        // Free PME data
+        if (pmedata)
         {
-            finish_pull(pull_work);
+            gmx_pme_destroy(pmedata);
+            pmedata = nullptr;
         }
-        finish_swapcoords(swap);
+
+        // FIXME: this is only here to manually unpin mdAtoms->chargeA_ and state->x,
+        // before we destroy the GPU context(s)
+        // Pinned buffers are associated with contexts in CUDA.
+        // As soon as we destroy GPU contexts after mdrunner() exits, these lines should go.
+        cr->destroyDD();
+        mdAtoms.reset(nullptr);
+        globalState.reset(nullptr);
+        localStateInstance.reset(nullptr);
+        mdModules_.reset(nullptr); // destruct force providers here as they might also use the GPU
+        fr.reset(nullptr);         // destruct forcerec before gpu
+        // TODO convert to C++ so we can get rid of these frees
+        sfree(disresdata);
+
+        // Destroy streams after all the structures using them
+        deviceStreamManager.reset(nullptr);
+
+        /* With tMPI we need to wait for all ranks to finish deallocation before
+         * destroying the CUDA context as some tMPI ranks may be sharing
+         * GPU and context.
+         *
+         * This is not a concern in OpenCL where we use one context per rank.
+         *
+         * Note: it is safe to not call the barrier on the ranks which do not use GPU,
+         * but it is easier and more futureproof to call it on the whole node.
+         *
+         * Note that this function needs to be called even if GPUs are not used
+         * in this run because the PME ranks have no knowledge of whether GPUs
+         * are used or not, but all ranks need to enter the barrier below.
+         * \todo Remove this physical node barrier after making sure
+         * that it's not needed anymore (with a shared GPU run).
+         */
+        if (GMX_THREAD_MPI)
+        {
+            physicalNodeComm.barrier();
+        }
+
+        const bool haveDetectedOrForcedCudaAwareMpi =
+                (gmx::checkMpiCudaAwareSupport() == gmx::GpuAwareMpiStatus::Supported
+                 || gmx::checkMpiCudaAwareSupport() == gmx::GpuAwareMpiStatus::Forced);
+        if (!haveDetectedOrForcedCudaAwareMpi)
+        {
+            // Don't reset GPU in case of GPU-AWARE MPI
+            // UCX creates GPU buffers which are cleaned-up as part of MPI_Finalize()
+            // resetting the device before MPI_Finalize() results in crashes inside UCX
+            // This can also cause issues in tests that invoke mdrunner() multiple
+            // times in the same process; ref #3952.
+            releaseDevice();
+        }
     }
-    else
-    {
-        GMX_RELEASE_ASSERT(pmedata, "pmedata was NULL while cr->duty was not DUTY_PP");
-        /* do PME only */
-        walltime_accounting = walltime_accounting_init(gmx_omp_nthreads_get(ModuleMultiThread::Pme));
-        gmx_pmeonly(&pmedata,
-                    cr,
-                    &nrnb,
-                    wcycle.get(),
-                    walltime_accounting,
-                    inputrec.get(),
-                    pmeRunMode,
-                    runScheduleWork.simulationWork.useGpuPmePpCommunication,
-                    deviceStreamManager.get());
-    }
-
-    wallcycle_stop(wcycle.get(), WallCycleCounter::Run);
-
-    /* Finish up, write some stuff
-     * if rerunMD, don't write last frame again
-     */
-    finish_run(fplog,
-               mdlog,
-               cr,
-               *inputrec,
-               &nrnb,
-               wcycle.get(),
-               walltime_accounting,
-               fr ? fr->nbv.get() : nullptr,
-               pmedata,
-               EI_DYNAMICS(inputrec->eI) && !isMultiSim(ms));
-
-    // Free PME data
-    if (pmedata)
-    {
-        gmx_pme_destroy(pmedata);
-        pmedata = nullptr;
-    }
-
-    // FIXME: this is only here to manually unpin mdAtoms->chargeA_ and state->x,
-    // before we destroy the GPU context(s)
-    // Pinned buffers are associated with contexts in CUDA.
-    // As soon as we destroy GPU contexts after mdrunner() exits, these lines should go.
-    cr->destroyDD();
-    mdAtoms.reset(nullptr);
-    globalState.reset(nullptr);
-    localStateInstance.reset(nullptr);
-    mdModules_.reset(nullptr); // destruct force providers here as they might also use the GPU
-    fr.reset(nullptr);         // destruct forcerec before gpu
-    // TODO convert to C++ so we can get rid of these frees
-    sfree(disresdata);
-
-    // Destroy streams after all the structures using them
-    deviceStreamManager.reset(nullptr);
-
-    if (!hwinfo_->deviceInfoList.empty())
-    {
-        /* stop the GPU profiler (only CUDA) */
-        stopGpuProfiler();
-    }
-
-    /* With tMPI we need to wait for all ranks to finish deallocation before
-     * destroying the CUDA context as some tMPI ranks may be sharing
-     * GPU and context.
-     *
-     * This is not a concern in OpenCL where we use one context per rank.
-     *
-     * Note: it is safe to not call the barrier on the ranks which do not use GPU,
-     * but it is easier and more futureproof to call it on the whole node.
-     *
-     * Note that this function needs to be called even if GPUs are not used
-     * in this run because the PME ranks have no knowledge of whether GPUs
-     * are used or not, but all ranks need to enter the barrier below.
-     * \todo Remove this physical node barrier after making sure
-     * that it's not needed anymore (with a shared GPU run).
-     */
-    if (GMX_THREAD_MPI)
-    {
-        physicalNodeComm.barrier();
-    }
-
-    const bool haveDetectedOrForcedCudaAwareMpi =
-            (gmx::checkMpiCudaAwareSupport() == gmx::GpuAwareMpiStatus::Supported
-             || gmx::checkMpiCudaAwareSupport() == gmx::GpuAwareMpiStatus::Forced);
-    if (!haveDetectedOrForcedCudaAwareMpi)
-    {
-        // Don't reset GPU in case of GPU-AWARE MPI
-        // UCX creates GPU buffers which are cleaned-up as part of MPI_Finalize()
-        // resetting the device before MPI_Finalize() results in crashes inside UCX
-        // This can also cause issues in tests that invoke mdrunner() multiple
-        // times in the same process; ref #3952.
-        releaseDevice(deviceInfo);
-    }
+    GMX_CATCH_ALL_AND_EXIT_WITH_FATAL_ERROR
 
     /* Does what it says */
     print_date_and_time(fplog, cr->nodeid, "Finished mdrun", gmx_gettime());
@@ -2365,6 +2501,7 @@ int Mdrunner::mdrunner()
         tMPI_Finalize();
     }
 #endif
+
     return rc;
 } // Mdrunner::mdrunner
 

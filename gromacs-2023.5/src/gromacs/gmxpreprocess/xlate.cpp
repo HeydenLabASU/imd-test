@@ -36,6 +36,7 @@
 #include "xlate.h"
 
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 
 #include <string>
@@ -43,13 +44,18 @@
 
 #include "gromacs/gmxpreprocess/fflibutil.h"
 #include "gromacs/gmxpreprocess/grompp_impl.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/residuetypes.h"
 #include "gromacs/topology/symtab.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/fileptr.h"
 #include "gromacs/utility/futil.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/strdb.h"
+#include "gromacs/utility/stringutil.h"
 
 #include "hackblock.h"
 
@@ -88,12 +94,12 @@ static void get_xlatoms(const std::filesystem::path& filename, FILE* fp, int* np
         {
             gmx_fatal(FARGS,
                       "Expected a residue name and two atom names in file '%s', not '%s'",
-                      filename.u8string().c_str(),
+                      filename.string().c_str(),
                       line);
         }
 
         srenew(xl, n + 1);
-        xl[n].filebase = gmx_strdup(filebase.u8string().c_str());
+        xl[n].filebase = gmx_strdup(filebase.string().c_str());
 
         /* Use wildcards... */
         if (strcmp(rbuf, "*") != 0)

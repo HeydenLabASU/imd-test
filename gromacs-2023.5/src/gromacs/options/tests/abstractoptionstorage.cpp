@@ -43,7 +43,10 @@
  */
 #include "gmxpre.h"
 
+#include "gromacs/options/abstractoptionstorage.h"
+
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -53,11 +56,18 @@
 #include "gromacs/options/options.h"
 #include "gromacs/options/optionsassigner.h"
 #include "gromacs/options/optionstoragetemplate.h"
+#include "gromacs/utility/any.h"
 #include "gromacs/utility/exceptions.h"
 
 #include "testutils/testasserts.h"
 #include "testutils/testexceptions.h"
 
+namespace gmx
+{
+class OptionManagerContainer;
+
+namespace test
+{
 namespace
 {
 
@@ -327,3 +337,5 @@ TEST(AbstractOptionStorageTest, AllowsEmptyValues)
 }
 
 } // namespace
+} // namespace test
+} // namespace gmx

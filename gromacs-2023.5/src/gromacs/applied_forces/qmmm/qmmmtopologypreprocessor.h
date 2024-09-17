@@ -44,9 +44,11 @@
 
 #include <set>
 #include <string>
+#include <vector>
 
 #include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/real.h"
 
 #include "qmmmtypes.h"
 
@@ -108,7 +110,7 @@ public:
      *
      * \param[in] qmIndices Array with global indicies of QM atoms
      */
-    QMMMTopologyPreprocessor(ArrayRef<const index> qmIndices);
+    QMMMTopologyPreprocessor(ArrayRef<const Index> qmIndices);
 
     /*! \brief Pocesses mtop topology and prepares atomNumbers_ and linkFrontier_ vectors
      * Builds topInfo_ containing information about topology modifications
@@ -131,7 +133,7 @@ public:
 
 private:
     //! Retruns true if globalAtomIndex belongs to QM region
-    bool isQMAtom(index globalAtomIndex);
+    bool isQMAtom(Index globalAtomIndex);
 
     /*! \brief Splits QM containing molecules out of MM blocks in topology
      * Modifies blocks in topology

@@ -38,10 +38,14 @@
 #include "config.h"
 
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 
 #include <algorithm>
+#include <array>
+#include <bitset>
+#include <filesystem>
 #include <memory>
 
 #include "gromacs/commandline/filenm.h"
@@ -66,6 +70,7 @@
 #include "gromacs/mdlib/md_support.h"
 #include "gromacs/mdlib/wall.h"
 #include "gromacs/mdlib/wholemoleculetransform.h"
+#include "gromacs/mdtypes/atominfo.h"
 #include "gromacs/mdtypes/commrec.h"
 #include "gromacs/mdtypes/fcdata.h"
 #include "gromacs/mdtypes/forcerec.h"
@@ -81,19 +86,28 @@
 #include "gromacs/pbcutil/ishift.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/tables/forcetable.h"
+#include "gromacs/topology/atoms.h"
+#include "gromacs/topology/block.h"
+#include "gromacs/topology/forcefieldparameters.h"
 #include "gromacs/topology/idef.h"
+#include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/mtop_util.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/topology/topology_enums.h"
 #include "gromacs/trajectory/trajectoryframe.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
+#include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/listoflists.h"
 #include "gromacs/utility/logger.h"
 #include "gromacs/utility/physicalnodecommunicator.h"
 #include "gromacs/utility/pleasecite.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/strconvert.h"
+#include "gromacs/utility/stringutil.h"
 
 #include "gpuforcereduction.h"
 #include "mdgraph_gpu.h"
@@ -285,7 +299,7 @@ makeAtomInfoForEachMoleculeBlock(const gmx_mtop_t& mtop, const t_forcerec* fr)
             for (int a = 0; a < molt.atoms.nr; a++)
             {
                 const t_atom& atom = molt.atoms.atom[a];
-                int64_t& atomInfo  = atomInfoOfMoleculeBlock.atomInfo[moleculeOffsetInBlock + a];
+                int32_t& atomInfo  = atomInfoOfMoleculeBlock.atomInfo[moleculeOffsetInBlock + a];
 
                 /* Store the energy group in atomInfo */
                 int gid  = getGroupType(mtop.groups,
@@ -349,12 +363,12 @@ makeAtomInfoForEachMoleculeBlock(const gmx_mtop_t& mtop, const t_forcerec* fr)
     return atomInfoForEachMoleculeBlock;
 }
 
-static std::vector<int64_t> expandAtomInfo(const int nmb,
+static std::vector<int32_t> expandAtomInfo(const int nmb,
                                            gmx::ArrayRef<const gmx::AtomInfoWithinMoleculeBlock> atomInfoForEachMoleculeBlock)
 {
     const int numAtoms = atomInfoForEachMoleculeBlock[nmb - 1].indexOfLastAtomInMoleculeBlock;
 
-    std::vector<int64_t> atomInfo(numAtoms);
+    std::vector<int32_t> atomInfo(numAtoms);
 
     int mb = 0;
     for (int a = 0; a < numAtoms; a++)
@@ -536,7 +550,7 @@ static std::vector<bondedtable_t> make_bonded_tables(FILE*                      
                 // being recognized and used for table 1.
                 std::string patternToFind = gmx::formatString("_%s%d.%s", tabext, i, ftp2ext(efXVG));
                 bool        madeTable     = false;
-                for (gmx::index j = 0; j < tabbfnm.ssize() && !madeTable; ++j)
+                for (gmx::Index j = 0; j < tabbfnm.ssize() && !madeTable; ++j)
                 {
                     if (gmx::endsWith(tabbfnm[j], patternToFind))
                     {
@@ -779,6 +793,9 @@ void init_forcerec(FILE*                            fplog,
     forcerec->rc_scaling = inputrec.pressureCouplingOptions.refcoord_scaling;
     copy_rvec(inputrec.posres_com, forcerec->posres_com);
     copy_rvec(inputrec.posres_comB, forcerec->posres_comB);
+
+    forcerec->haveBoxDeformation = ir_haveBoxDeformation(inputrec);
+
     forcerec->rlist                  = cutoff_inf(inputrec.rlist);
     forcerec->ljpme_combination_rule = inputrec.ljpme_combination_rule;
 
@@ -1069,7 +1086,7 @@ void init_forcerec(FILE*                            fplog,
     if (inputrec.eDispCorr != DispersionCorrectionType::No)
     {
         forcerec->dispersionCorrection = std::make_unique<DispersionCorrection>(
-                mtop, inputrec, forcerec->haveBuckingham, forcerec->ntype, forcerec->nbfp, *forcerec->ic, tabfn);
+                mtop, inputrec, forcerec->haveBuckingham, *forcerec->ic, tabfn);
         forcerec->dispersionCorrection->print(mdlog);
     }
 

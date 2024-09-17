@@ -46,15 +46,25 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <algorithm>
+#include <filesystem>
+#include <functional>
 #include <memory>
 #include <new>
+#include <optional>
 #include <sstream>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "gromacs/commandline/cmdlinehelpcontext.h"
+#include "gromacs/commandline/cmdlinemodule.h"
 #include "gromacs/commandline/cmdlineoptionsmodule.h"
 #include "gromacs/commandline/cmdlineprogramcontext.h"
+#include "gromacs/onlinehelp/helpwritercontext.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/futil.h"
 #include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/strconvert.h"
@@ -71,6 +81,8 @@ namespace gmx
 {
 namespace test
 {
+class FloatingPointTolerance;
+class ITextBlockMatcherSettings;
 
 /********************************************************************
  * CommandLine::Impl
@@ -160,7 +172,7 @@ void CommandLine::initFromArray(const ArrayRef<const char* const>& cmdline)
 
 void CommandLine::append(const char* arg)
 {
-    GMX_RELEASE_ASSERT(impl_->argc_ == ssize(impl_->args_),
+    GMX_RELEASE_ASSERT(impl_->argc_ == gmx::ssize(impl_->args_),
                        "Command-line has been modified externally");
     size_t newSize = impl_->args_.size() + 1;
     impl_->args_.reserve(newSize);
@@ -293,13 +305,13 @@ public:
     struct OutputFileInfo
     {
         OutputFileInfo(const char* option, const std::string& path, FileMatcherPointer matcher) :
-            option(option), path(path), matcher(std::move(matcher))
+            option_(option), path_(path), matcher_(std::move(matcher))
         {
         }
 
-        std::string        option;
-        std::string        path;
-        FileMatcherPointer matcher;
+        std::string        option_;
+        std::string        path_;
+        FileMatcherPointer matcher_;
     };
 
     typedef std::vector<OutputFileInfo> OutputFileList;
@@ -354,7 +366,7 @@ void CommandLineTestHelper::setInputFileContents(CommandLine*       args,
 {
     GMX_ASSERT(extension[0] != '.', "Extension should not contain a dot");
     std::string fullFilename =
-            impl_->fileManager_.getTemporaryFilePath(formatString("%d.%s", args->argc(), extension)).u8string();
+            impl_->fileManager_.getTemporaryFilePath(formatString("%d.%s", args->argc(), extension)).string();
     TextWriter::writeFileFromString(fullFilename, contents);
     args->addOption(option, fullFilename);
 }
@@ -366,7 +378,7 @@ void CommandLineTestHelper::setInputFileContents(CommandLine*                   
 {
     GMX_ASSERT(extension[0] != '.', "Extension should not contain a dot");
     std::string fullFilename =
-            impl_->fileManager_.getTemporaryFilePath(formatString("%d.%s", args->argc(), extension)).u8string();
+            impl_->fileManager_.getTemporaryFilePath(formatString("%d.%s", args->argc(), extension)).string();
     TextWriter                                  file(fullFilename);
     ArrayRef<const char* const>::const_iterator i;
     for (i = contents.begin(); i != contents.end(); ++i)
@@ -395,7 +407,7 @@ std::string CommandLineTestHelper::setOutputFile(CommandLine*                arg
     {
         suffix = formatString("%d.%s", args->argc(), filename);
     }
-    std::string fullFilename = impl_->fileManager_.getTemporaryFilePath(suffix).u8string();
+    std::string fullFilename = impl_->fileManager_.getTemporaryFilePath(suffix).string();
     args->addOption(option, fullFilename);
     impl_->outputFiles_.emplace_back(option, fullFilename, matcher.createFileMatcher());
     return fullFilename;
@@ -435,8 +447,8 @@ void CommandLineTestHelper::checkOutputFiles(TestReferenceChecker checker) const
         TestReferenceChecker outputChecker(checker.checkCompound("OutputFiles", "Files"));
         for (const auto& outfile : impl_->outputFiles_)
         {
-            TestReferenceChecker fileChecker(outputChecker.checkCompound("File", outfile.option.c_str()));
-            outfile.matcher->checkFile(outfile.path, &fileChecker);
+            TestReferenceChecker fileChecker(outputChecker.checkCompound("File", outfile.option_.c_str()));
+            outfile.matcher_->checkFile(outfile.path_, &fileChecker);
         }
     }
 }
@@ -466,7 +478,7 @@ CommandLineTestBase::~CommandLineTestBase() {}
 
 void CommandLineTestBase::setInputFile(const char* option, const char* filename)
 {
-    impl_->cmdline_.addOption(option, TestFileManager::getInputFilePath(filename).u8string());
+    impl_->cmdline_.addOption(option, TestFileManager::getInputFilePath(filename).string());
 }
 
 void CommandLineTestBase::setInputFile(const char* option, const std::string& filename)
@@ -481,8 +493,8 @@ void CommandLineTestBase::setModifiableInputFile(const char* option, const std::
 
 void CommandLineTestBase::setModifiableInputFile(const char* option, const char* filename)
 {
-    std::string originalFileName = gmx::test::TestFileManager::getInputFilePath(filename).u8string();
-    std::string modifiableFileName = fileManager().getTemporaryFilePath(filename).u8string();
+    std::string originalFileName = gmx::test::TestFileManager::getInputFilePath(filename).string();
+    std::string modifiableFileName = fileManager().getTemporaryFilePath(filename).string();
     gmx_file_copy(originalFileName.c_str(), modifiableFileName.c_str(), true);
     impl_->cmdline_.addOption(option, modifiableFileName);
 }
@@ -543,8 +555,8 @@ std::string CommandLineTestBase::setInputAndOutputFile(const char*              
                                                        const char*                      filename,
                                                        const ITextBlockMatcherSettings& matcher)
 {
-    std::string originalFileName = gmx::test::TestFileManager::getInputFilePath(filename).u8string();
-    std::string modifiableFileName = fileManager().getTemporaryFilePath(filename).u8string();
+    std::string originalFileName = gmx::test::TestFileManager::getInputFilePath(filename).string();
+    std::string modifiableFileName = fileManager().getTemporaryFilePath(filename).string();
     gmx_file_copy(originalFileName.c_str(), modifiableFileName.c_str(), true);
     impl_->helper_.setOutputFile(&impl_->cmdline_, option, filename, matcher);
     return modifiableFileName;
@@ -554,8 +566,8 @@ std::string CommandLineTestBase::setInputAndOutputFile(const char*              
                                                        const char*                 filename,
                                                        const IFileMatcherSettings& matcher)
 {
-    std::string originalFileName = gmx::test::TestFileManager::getInputFilePath(filename).u8string();
-    std::string modifiableFileName = fileManager().getTemporaryFilePath(filename).u8string();
+    std::string originalFileName = gmx::test::TestFileManager::getInputFilePath(filename).string();
+    std::string modifiableFileName = fileManager().getTemporaryFilePath(filename).string();
     gmx_file_copy(originalFileName.c_str(), modifiableFileName.c_str(), true);
     impl_->helper_.setOutputFile(&impl_->cmdline_, option, filename, matcher);
     return modifiableFileName;

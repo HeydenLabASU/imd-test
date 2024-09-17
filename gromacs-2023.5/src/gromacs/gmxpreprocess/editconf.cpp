@@ -36,14 +36,20 @@
 #include "editconf.h"
 
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <algorithm>
+#include <filesystem>
 #include <string>
 
+#include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/commandline/viewit.h"
 #include "gromacs/fileio/confio.h"
+#include "gromacs/fileio/filetypes.h"
+#include "gromacs/fileio/oenv.h"
 #include "gromacs/fileio/pdbio.h"
 #include "gromacs/fileio/tpxio.h"
 #include "gromacs/fileio/trxio.h"
@@ -53,18 +59,28 @@
 #include "gromacs/math/units.h"
 #include "gromacs/math/utilities.h"
 #include "gromacs/math/vec.h"
+#include "gromacs/math/vectypes.h"
+#include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/pbcutil/rmpbc.h"
 #include "gromacs/topology/atomprop.h"
+#include "gromacs/topology/atoms.h"
+#include "gromacs/topology/idef.h"
 #include "gromacs/topology/index.h"
+#include "gromacs/topology/symtab.h"
 #include "gromacs/topology/topology.h"
+#include "gromacs/topology/topology_enums.h"
 #include "gromacs/utility/arraysize.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/futil.h"
 #include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/smalloc.h"
 #include "gromacs/utility/strdb.h"
+
+struct gmx_output_env_t;
 
 static real calc_mass(t_atoms* atoms, gmx_bool bGetMass, AtomProperties* aps)
 {
@@ -720,12 +736,13 @@ int gmx_editconf(int argc, char* argv[])
           etBOOL,
           { &bCONECT },
           "Add CONECT records to a [REF].pdb[ref] file when written. Can only be done when a "
-          "topology is present" }
+          "topology (tpr file) is present" }
     };
 #define NPA asize(pa)
 
     FILE*             out;
-    const char *      infile, *outfile;
+    const char*       infile;
+    const char*       outfile;
     int               outftp, inftp, natom, i, j, n_bfac, itype, ntype;
     double *          bfac    = nullptr, c6, c12;
     int*              bfac_nr = nullptr;
@@ -804,17 +821,17 @@ int gmx_editconf(int argc, char* argv[])
         printf("Incompatible options -mead and -grasp. Turning off -grasp\n");
         bGrasp = FALSE;
     }
-    if (bGrasp && (outftp != efPDB))
+    if ((bGrasp || bCONECT) && (outftp != efPDB))
     {
         gmx_fatal(FARGS,
                   "Output file should be a .pdb file"
-                  " when using the -grasp option\n");
+                  " when using the -grasp or -conect options\n");
     }
-    if ((bMead || bGrasp) && (fn2ftp(infile) != efTPR))
+    if ((bMead || bGrasp || bCONECT) && inftp != efTPR)
     {
         gmx_fatal(FARGS,
                   "Input file should be a .tpr file"
-                  " when using the -mead option\n");
+                  " when using the -mead, -grasp, or -conect options\n");
     }
 
     t_symtab symtab;
@@ -950,7 +967,7 @@ int gmx_editconf(int argc, char* argv[])
         if (bIndex)
         {
             fprintf(stderr, "\nSelect a group for determining the system size:\n");
-            get_index(&atoms, ftp2fn_null(efNDX, NFILE, fnm), 1, &ssize, &sindex, &sgrpname);
+            get_index(&atoms, ftp2path_optional(efNDX, NFILE, fnm), 1, &ssize, &sindex, &sgrpname);
         }
         else
         {
@@ -985,7 +1002,7 @@ int gmx_editconf(int argc, char* argv[])
 
         /* Get a group for principal component analysis */
         fprintf(stderr, "\nSelect group for the determining the orientation\n");
-        get_index(&atoms, ftp2fn_null(efNDX, NFILE, fnm), 1, &isize, &index, &grpnames);
+        get_index(&atoms, ftp2path_optional(efNDX, NFILE, fnm), 1, &isize, &index, &grpnames);
 
         /* Orient the principal axes along the coordinate axes */
         orient_princ(&atoms, isize, index, natom, x, bHaveV ? v : nullptr, nullptr);
@@ -1026,7 +1043,7 @@ int gmx_editconf(int argc, char* argv[])
         if (bIndex)
         {
             fprintf(stderr, "\nSelect a group that you want to align:\n");
-            get_index(&atoms, ftp2fn_null(efNDX, NFILE, fnm), 1, &numAlignmentAtoms, &aindex, &agrpname);
+            get_index(&atoms, ftp2path_optional(efNDX, NFILE, fnm), 1, &numAlignmentAtoms, &aindex, &agrpname);
         }
         else
         {
@@ -1085,7 +1102,7 @@ int gmx_editconf(int argc, char* argv[])
         if (bIndex)
         {
             fprintf(stderr, "\nSelect a group that you want to translate:\n");
-            get_index(&atoms, ftp2fn_null(efNDX, NFILE, fnm), 1, &ssize, &sindex, &sgrpname);
+            get_index(&atoms, ftp2path_optional(efNDX, NFILE, fnm), 1, &ssize, &sindex, &sgrpname);
         }
         else
         {
@@ -1264,7 +1281,8 @@ int gmx_editconf(int argc, char* argv[])
                    "to use a cubic box instead, or why not try a dodecahedron today?\n");
         }
     }
-    if (bCONECT && (outftp == efPDB) && (inftp == efTPR))
+    /* We have already checked that the output is a pdb file and the input a tpr file */
+    if (bCONECT)
     {
         conect = gmx_conect_generate(top);
     }
@@ -1276,7 +1294,7 @@ int gmx_editconf(int argc, char* argv[])
     if (bIndex)
     {
         fprintf(stderr, "\nSelect a group for output:\n");
-        get_index(&atoms, opt2fn_null("-n", NFILE, fnm), 1, &isize, &index, &grpname);
+        get_index(&atoms, opt2path_optional("-n", NFILE, fnm), 1, &isize, &index, &grpname);
 
         if (resnr_start >= 0)
         {

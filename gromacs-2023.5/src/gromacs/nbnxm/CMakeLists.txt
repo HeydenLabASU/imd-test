@@ -52,6 +52,8 @@ file(GLOB NBNXM_SOURCES
     pairlist.cpp
     pairlistparams.cpp
     pairlistset.cpp
+    pairlistwork.cpp
+    pairlist_simd_kernel.cpp
     pairlist_tuning.cpp
     pairsearch.cpp
     prunekerneldispatch.cpp
@@ -59,6 +61,8 @@ file(GLOB NBNXM_SOURCES
     kernels_reference/kernel_gpu_ref.cpp
     kernels_reference/kernel_ref.cpp
     kernels_reference/kernel_ref_prune.cpp
+    simd_energy_accumulator.cpp
+    simd_prune_kernel.cpp
     # Benchmark source files
     # TODO these should not be in libgromacs
     benchmark/bench_setup.cpp
@@ -83,7 +87,7 @@ endif()
 if(GMX_GPU_SYCL)
     add_subdirectory(sycl)
     gmx_add_libgromacs_sources(nbnxm_gpu_data_mgmt.cpp nbnxm_gpu_buffer_ops.cpp)
-    _gmx_add_files_to_property(SYCL_SOURCES nbnxm_gpu_data_mgmt.cpp nbnxm_gpu_buffer_ops.cpp nbnxm.cpp)
+    _gmx_add_files_to_property(SYCL_SOURCES nbnxm_gpu_data_mgmt.cpp nbnxm_gpu_buffer_ops.cpp)
 endif()
 
 set(LIBGROMACS_SOURCES ${LIBGROMACS_SOURCES} ${NBNXM_SOURCES} PARENT_SCOPE)
@@ -95,8 +99,7 @@ target_link_libraries(nbnxm PRIVATE
 
 # Public interface for modules, including dependencies and interfaces
 #target_include_directories(nbnxm PUBLIC
-target_include_directories(nbnxm INTERFACE
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+#        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 #target_link_libraries(nbnxm PUBLIC
 target_link_libraries(nbnxm INTERFACE
         legacy_api

@@ -38,12 +38,21 @@
 #include "config.h"
 
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 
 #include <algorithm>
 #include <iterator>
 #include <memory>
 #include <numeric>
+#include <string>
 #include <vector>
+
+#include "gromacs/topology/atoms.h"
+#include "gromacs/topology/idef.h"
+#include "gromacs/topology/topology_enums.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/enumerationhelpers.h"
 
 #if GMX_USE_TNG
 #    include "tng/tng_io.h"
@@ -142,12 +151,12 @@ void gmx_tng_open(const std::filesystem::path& filename, char mode, gmx_tng_traj
     /* tng must not be pointing at already allocated memory.
      * Memory will be allocated by tng_util_trajectory_open() and must
      * later on be freed by tng_util_trajectory_close(). */
-    if (TNG_SUCCESS != tng_util_trajectory_open(filename.u8string().c_str(), mode, tng))
+    if (TNG_SUCCESS != tng_util_trajectory_open(filename.string().c_str(), mode, tng))
     {
         /* TNG does return more than one degree of error, but there is
            no use case for GROMACS handling the non-fatal errors
            gracefully. */
-        gmx_fatal(FARGS, "File I/O error while opening %s for %s", filename.u8string().c_str(), modeToVerb(mode));
+        gmx_fatal(FARGS, "File I/O error while opening %s for %s", filename.string().c_str(), modeToVerb(mode));
     }
 
     if (mode == 'w' || mode == 'a')
@@ -1298,7 +1307,7 @@ real getDistanceScaleFactor(gmx_tng_trajectory_t in)
     {
         case 9: distanceScaleFactor = gmx::c_nano / gmx::c_nano; break;
         case 10: distanceScaleFactor = gmx::c_nano / gmx::c_angstrom; break;
-        default: distanceScaleFactor = pow(10.0, exp + 9.0);
+        default: distanceScaleFactor = std::pow(10.0, exp + 9.0);
     }
 
     return distanceScaleFactor;
@@ -1352,7 +1361,7 @@ void gmx_tng_setup_atom_subgroup(gmx_tng_trajectory_t gmx_tng, gmx::ArrayRef<con
         tng_molecule_name_set(tng, mol, name);
         tng_molecule_chain_add(tng, mol, "", &chain);
 
-        for (gmx::index i = 0; i < ind.ssize(); i++)
+        for (gmx::Index i = 0; i < ind.ssize(); i++)
         {
             char temp_name[256], temp_type[256];
 
@@ -1403,7 +1412,7 @@ void gmx_tng_setup_atom_subgroup(gmx_tng_trajectory_t gmx_tng, gmx::ArrayRef<con
 }
 
 /* TODO: If/when TNG acquires the ability to copy data blocks without
- * uncompressing them, then this implemenation should be reconsidered.
+ * uncompressing them, then this implementation should be reconsidered.
  * Ideally, gmx trjconv -f a.tng -o b.tng -b 10 -e 20 would be fast
  * and lose no information. */
 gmx_bool gmx_read_next_tng_frame(gmx_tng_trajectory_t gmx_tng_input,

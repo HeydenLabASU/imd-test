@@ -41,6 +41,14 @@
  */
 #include "gmxpre.h"
 
+#include <filesystem>
+#include <string>
+
+#include <gtest/gtest.h>
+
+#include "testutils/cmdlinetest.h"
+#include "testutils/testfilemanager.h"
+
 #include "moduletest.h"
 
 namespace gmx
@@ -108,7 +116,7 @@ TEST_F(CompelTest, SwapCanRun)
 
     EXPECT_EQ(0, runner_.callGrompp());
 
-    runner_.swapFileName_ = fileManager_.getTemporaryFilePath("swap.xvg").u8string();
+    runner_.swapFileName_ = fileManager_.getTemporaryFilePath("swap.xvg").string();
 
     ::gmx::test::CommandLine swapCaller;
     swapCaller.addOption("-swap", runner_.swapFileName_);

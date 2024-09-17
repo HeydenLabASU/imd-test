@@ -58,14 +58,14 @@ PmeForceSenderGpu::Impl::Impl(GpuEventSynchronizer*  pmeForcesReady,
                               MPI_Comm               comm,
                               const DeviceContext&   deviceContext,
                               gmx::ArrayRef<PpRanks> ppRanks) :
-    pmeForcesReady_(pmeForcesReady), comm_(comm), ppRanks_(ppRanks), deviceContext_(deviceContext)
+    pmeForcesReady_(pmeForcesReady), comm_(comm), ppRanks_(ppRanks)
 {
     // Create streams, events and flags to manage pushing of force buffers to remote PP ranks
     ppCommManagers_.reserve(ppRanks.size());
     for (size_t i = 0; i != ppRanks.size(); ++i)
     {
         ppCommManagers_.emplace_back(PpForceCommManager{
-                std::make_unique<DeviceStream>(deviceContext_, DeviceStreamPriority::High, false),
+                std::make_unique<DeviceStream>(deviceContext, DeviceStreamPriority::High, false),
                 std::make_unique<GpuEventSynchronizer>(),
                 std::make_unique<std::atomic<CacheLineAlignedFlag>>(),
                 nullptr,
@@ -154,7 +154,6 @@ void PmeForceSenderGpu::Impl::sendFToPpGpuAwareMpi(DeviceBuffer<RVec> sendbuf,
     pmeForcesReady_->waitForEvent();
 
     MPI_Isend(asMpiPointer(sendbuf) + offset, numBytes, MPI_BYTE, ppRank, 0, comm_, request);
-
 #else
     GMX_UNUSED_VALUE(sendbuf);
     GMX_UNUSED_VALUE(offset);
@@ -163,6 +162,13 @@ void PmeForceSenderGpu::Impl::sendFToPpGpuAwareMpi(DeviceBuffer<RVec> sendbuf,
     GMX_UNUSED_VALUE(request);
 #endif
 }
+
+void PmeForceSenderGpu::Impl::waitForEvents()
+{
+    GMX_ASSERT(GMX_LIB_MPI, "waitForEvents is expected to be called only for Lib-MPI");
+    pmeForcesReady_->waitForEvent();
+}
+
 
 PmeForceSenderGpu::PmeForceSenderGpu(GpuEventSynchronizer*  pmeForcesReady,
                                      MPI_Comm               comm,
@@ -192,6 +198,11 @@ void PmeForceSenderGpu::sendFToPpGpuAwareMpi(DeviceBuffer<RVec> sendbuf,
 void PmeForceSenderGpu::sendFToPpPeerToPeer(int ppRank, int numAtoms, bool sendForcesDirectToPpGpu)
 {
     impl_->sendFToPpPeerToPeer(ppRank, numAtoms, sendForcesDirectToPpGpu);
+}
+
+void PmeForceSenderGpu::waitForEvents()
+{
+    impl_->waitForEvents();
 }
 
 

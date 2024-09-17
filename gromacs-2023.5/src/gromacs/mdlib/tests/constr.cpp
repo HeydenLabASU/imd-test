@@ -48,18 +48,29 @@
 #include "config.h"
 
 #include <cassert>
+#include <cmath>
 
+#include <memory>
+#include <ostream>
+#include <string>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "gromacs/math/paddedvector.h"
 #include "gromacs/math/vec.h"
 #include "gromacs/math/vectypes.h"
+#include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/pbcutil/pbc.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/enumerationhelpers.h"
+#include "gromacs/utility/real.h"
 #include "gromacs/utility/stringutil.h"
 
 #include "testutils/refdata.h"
+#include "testutils/test_device.h"
 #include "testutils/test_hardware_environment.h"
 #include "testutils/testasserts.h"
 
@@ -448,7 +459,7 @@ public:
     {
 
         // Test if all the constraints are satisfied
-        for (index c = 0; c < ssize(testData.constraints_) / 3; c++)
+        for (Index c = 0; c < gmx::ssize(testData.constraints_) / 3; c++)
         {
             real r0 = testData.constraintsR0_.at(testData.constraints_.at(3 * c));
             int  i  = testData.constraints_.at(3 * c + 1);
@@ -493,7 +504,7 @@ public:
     static void checkConstrainsDirection(const ConstraintsTestData& testData, t_pbc pbc)
     {
 
-        for (index c = 0; c < ssize(testData.constraints_) / 3; c++)
+        for (Index c = 0; c < gmx::ssize(testData.constraints_) / 3; c++)
         {
             int  i = testData.constraints_.at(3 * c + 1);
             int  j = testData.constraints_.at(3 * c + 2);
@@ -689,7 +700,7 @@ TEST_P(ConstraintsTest, SatisfiesConstraints)
         // SHAKE tolerance=0.00002: 0.1
         const float virialRelativeTolerance = (runner->name().substr(0, 5) == "SHAKE" ? 0.1F : 0.02F);
         FloatingPointTolerance virialTolerance =
-                absoluteTolerance(fabs(virialTrace) / 3 * virialRelativeTolerance);
+                absoluteTolerance(std::fabs(virialTrace) / 3 * virialRelativeTolerance);
 
         checker_.setDefaultTolerance(virialTolerance);
         checkVirialTensor(testData);

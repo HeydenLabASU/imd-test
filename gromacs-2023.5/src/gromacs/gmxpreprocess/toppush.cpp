@@ -37,12 +37,19 @@
 
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
+#include <iterator>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
 
 #include "gromacs/fileio/warninp.h"
 #include "gromacs/gmxpreprocess/gpp_atomtype.h"
@@ -54,15 +61,20 @@
 #include "gromacs/gmxpreprocess/toputil.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/mdtypes/md_enums.h"
+#include "gromacs/topology/atoms.h"
 #include "gromacs/topology/exclusionblocks.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/topology/symtab.h"
+#include "gromacs/topology/topology_enums.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/cstringutil.h"
 #include "gromacs/utility/enumerationhelpers.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
+#include "gromacs/utility/listoflists.h"
 #include "gromacs/utility/smalloc.h"
+#include "gromacs/utility/stringcompare.h"
 #include "gromacs/utility/stringtoenumvalueconverter.h"
 #include "gromacs/utility/stringutil.h"
 
@@ -128,7 +140,7 @@ void generate_nbparams(CombinationRule         comb,
                             cj0           = cPrefetch[j].first;
                             ci1           = cPrefetch[i].second;
                             cj1           = cPrefetch[j].second;
-                            forceParam[0] = (fabs(ci0) + fabs(cj0)) * 0.5;
+                            forceParam[0] = (std::fabs(ci0) + std::fabs(cj0)) * 0.5;
                             /* Negative sigma signals that c6 should be set to zero later,
                              * so we need to propagate that through the combination rules.
                              */
@@ -1085,7 +1097,7 @@ void push_nbt(Directive d, t_nbparam** nbt, PreprocessingAtomTypes* atypes, char
         /* When the B topology parameters are not set,
          * copy them from topology A
          */
-        GMX_ASSERT(nrfp <= 4, "LJ-14 cannot have more than 4 parameters");
+        GMX_ASSERT(nrfp <= NRFP(F_LJ14), "LJ-14 cannot have more than 4 parameters");
         for (i = n; i < nrfp; i++)
         {
             c[i] = c[i - 2];
@@ -1183,6 +1195,8 @@ void push_cmaptype(Directive                         d,
                    char*                             line,
                    WarningHandler*                   wi)
 {
+    GMX_ASSERT(nral == NRAL(F_CMAP), "CMAP requires 5 atoms per interaction");
+
     const char* formal = "%s%s%s%s%s%s%s%s%n";
 
     int  ft, ftype, nn, nrfp, nrfpA, nrfpB;
@@ -1194,20 +1208,19 @@ void push_cmaptype(Directive                         d,
     read_cmap = 0;
     start     = 0;
 
-    GMX_ASSERT(nral == 5, "CMAP requires 5 atoms per interaction");
-
     /* Here we can only check for < 8 */
-    if ((nn = sscanf(line, formal, alc[0], alc[1], alc[2], alc[3], alc[4], alc[5], alc[6], alc[7], &nchar_consumed))
+    if ((nn = sscanf(line, formal, alc[0], alc[1], alc[2], alc[3], alc[4], alc[nral], alc[nral + 1], alc[nral + 2], &nchar_consumed))
         < nral + 3)
     {
-        auto message =
-                gmx::formatString("Incorrect number of atomtypes for cmap (%d instead of 5)", nn - 1);
+        auto message = gmx::formatString(
+                "Incorrect number of atomtypes for cmap type (%d instead of %d)", nn - 3, nral);
         wi->addError(message);
         return;
     }
     start += nchar_consumed;
 
-    ft     = strtol(alc[nral], nullptr, 10);
+    ft = strtol(alc[nral], nullptr, 10);
+    GMX_RELEASE_ASSERT(ft == 1, "Invalid function type for cmap type: must be 1");
     nxcmap = strtol(alc[nral + 1], nullptr, 10);
     nycmap = strtol(alc[nral + 2], nullptr, 10);
 
@@ -1221,8 +1234,8 @@ void push_cmaptype(Directive                         d,
 
     ncmap = nxcmap * nycmap;
     ftype = ifunc_index(d, ft);
-    nrfpA = strtol(alc[6], nullptr, 10) * strtol(alc[6], nullptr, 10);
-    nrfpB = strtol(alc[7], nullptr, 10) * strtol(alc[7], nullptr, 10);
+    nrfpA = strtol(alc[nral + 1], nullptr, 10) * strtol(alc[nral + 1], nullptr, 10);
+    nrfpB = strtol(alc[nral + 2], nullptr, 10) * strtol(alc[nral + 2], nullptr, 10);
     nrfp  = nrfpA + nrfpB;
 
     /* Read in CMAP parameters */
@@ -1243,13 +1256,30 @@ void push_cmaptype(Directive                         d,
         }
         else
         {
-            auto message =
-                    gmx::formatString("Error in reading cmap parameter for angle %s %s %s %s %s",
-                                      alc[0],
-                                      alc[1],
-                                      alc[2],
-                                      alc[3],
-                                      alc[4]);
+            auto message = gmx::formatString(
+                    "Error in reading cmap parameter for atomtypes %s %s %s %s %s: found %d, "
+                    "expected %d",
+                    alc[0],
+                    alc[1],
+                    alc[2],
+                    alc[3],
+                    alc[4],
+                    read_cmap,
+                    ncmap);
+            wi->addError(message);
+        }
+    }
+    if ((nn = sscanf(line + start + sl, " %s ", s)))
+    {
+        if (nn == 1)
+        {
+            auto message = gmx::formatString(
+                    "One or more unread cmap parameters exist for atomtypes %s %s %s %s %s",
+                    alc[0],
+                    alc[1],
+                    alc[2],
+                    alc[3],
+                    alc[4]);
             wi->addError(message);
         }
     }
@@ -1282,27 +1312,39 @@ void push_cmaptype(Directive                         d,
     /* Set grid spacing and the number of grids (we assume these numbers to be the same for all
      * grids so we can safely assign them each time
      */
-    bt[F_CMAP].cmakeGridSpacing = nxcmap; /* Or nycmap, they need to be equal */
-    bt[F_CMAP].cmapAngles++; /* Since we are incrementing here, we need to subtract later, see (*****) */
-    nct = (nral + 1) * bt[F_CMAP].cmapAngles;
+    bt[F_CMAP].cmapGridSpacing_ = nxcmap; /* Or nycmap, they need to be equal */
 
     for (int i = 0; (i < nral); i++)
     {
         /* Assign a grid number to each cmap_type */
         GMX_RELEASE_ASSERT(bondAtomType != nullptr, "Need valid PreprocessingBondAtomType object");
-        bt[F_CMAP].cmapAtomTypes.emplace_back(*bondAtomType->bondAtomTypeFromName(alc[i]));
+        auto cmapBondAtomType = bondAtomType->bondAtomTypeFromName(alc[i]);
+        if (!cmapBondAtomType)
+        {
+            auto message = gmx::formatString(
+                    "Unknown bond_atomtype for %s in cmap atomtypes %s %s %s %s %s",
+                    alc[i],
+                    alc[0],
+                    alc[1],
+                    alc[2],
+                    alc[3],
+                    alc[4]);
+            wi->addError(message);
+            continue;
+        }
+        bt[F_CMAP].cmapAtomTypes.emplace_back(*cmapBondAtomType);
     }
 
     /* Assign a type number to this cmap */
-    bt[F_CMAP].cmapAtomTypes.emplace_back(
-            bt[F_CMAP].cmapAngles
-            - 1); /* Since we inremented earlier, we need to subtrac here, to get the types right (****) */
+    bt[F_CMAP].cmapAtomTypes.emplace_back(bt[F_CMAP].numCmaps_);
+    bt[F_CMAP].numCmaps_++;
 
     /* Check for the correct number of atoms (again) */
-    if (bt[F_CMAP].nct() != nct)
+    nct = (nral + 1) * bt[F_CMAP].numCmaps_;
+    if (bt[F_CMAP].nct() != static_cast<std::size_t>(nct))
     {
         auto message = gmx::formatString(
-                "Incorrect number of atom types (%d) in cmap type %d\n", nct, bt[F_CMAP].cmapAngles);
+                "Incorrect number of atomtypes (%d) in cmap type %d\n", nct, bt[F_CMAP].numCmaps_);
         wi->addError(message);
     }
     std::vector<int> atomTypes =
@@ -1537,7 +1579,7 @@ static bool findIfAllNBAtomsMatch(gmx::ArrayRef<const int> atomsFromParameterArr
     }
     else if (bB)
     {
-        for (gmx::index i = 0; i < atomsFromCurrentParameter.ssize(); i++)
+        for (gmx::Index i = 0; i < atomsFromCurrentParameter.ssize(); i++)
         {
             if (at->atom[atomsFromCurrentParameter[i]].typeB != atomsFromParameterArray[i])
             {
@@ -1548,7 +1590,7 @@ static bool findIfAllNBAtomsMatch(gmx::ArrayRef<const int> atomsFromParameterArr
     }
     else
     {
-        for (gmx::index i = 0; i < atomsFromCurrentParameter.ssize(); i++)
+        for (gmx::Index i = 0; i < atomsFromCurrentParameter.ssize(); i++)
         {
             if (at->atom[atomsFromCurrentParameter[i]].type != atomsFromParameterArray[i])
             {
@@ -1572,10 +1614,10 @@ static bool default_nb_params(int                               ftype,
     InteractionOfType* pi    = nullptr;
     int                nr    = bt[ftype].size();
     int                nral  = NRAL(ftype);
-    int                nrfp  = interaction_function[ftype].nrfpA;
+    int                nrfpA = interaction_function[ftype].nrfpA;
     int                nrfpB = interaction_function[ftype].nrfpB;
 
-    if ((!bB && nrfp == 0) || (bB && nrfpB == 0))
+    if ((!bB && nrfpA == 0) || (bB && nrfpB == 0))
     {
         return TRUE;
     }
@@ -1633,18 +1675,18 @@ static bool default_nb_params(int                               ftype,
         gmx::ArrayRef<const real> forceParam = pi->forceParam();
         if (bB)
         {
-            if (nrfp + nrfpB > MAXFORCEPARAM)
+            if (nrfpA + nrfpB > MAXFORCEPARAM)
             {
                 gmx_incons("Too many force parameters");
             }
             for (int j = c_start; j < nrfpB; j++)
             {
-                p->setForceParameter(nrfp + j, forceParam[j]);
+                p->setForceParameter(nrfpA + j, forceParam[j]);
             }
         }
         else
         {
-            for (int j = c_start; j < nrfp; j++)
+            for (int j = c_start; j < nrfpA; j++)
             {
                 p->setForceParameter(j, forceParam[j]);
             }
@@ -1652,7 +1694,7 @@ static bool default_nb_params(int                               ftype,
     }
     else
     {
-        for (int j = c_start; j < nrfp; j++)
+        for (int j = c_start; j < nrfpA; j++)
         {
             p->setForceParameter(j, 0.0);
         }
@@ -1677,7 +1719,7 @@ static bool default_cmap_params(gmx::ArrayRef<InteractionsOfType> bondtype,
     ct           = 0;
 
     /* Match the current cmap angle against the list of cmap_types */
-    for (int i = 0; i < bondtype[F_CMAP].nct() && !bFound; i += 6)
+    for (std::size_t i = 0; i < bondtype[F_CMAP].nct() && !bFound; i += NRAL(F_CMAP) + 1)
     {
         if (bB) {}
         else
@@ -1695,7 +1737,7 @@ static bool default_cmap_params(gmx::ArrayRef<InteractionsOfType> bondtype,
             {
                 /* Found cmap torsion */
                 bFound       = true;
-                ct           = bondtype[F_CMAP].cmapAtomTypes[i + 5];
+                ct           = bondtype[F_CMAP].cmapAtomTypes[i + NRAL(F_CMAP)];
                 nparam_found = 1;
             }
         }
@@ -1774,8 +1816,9 @@ defaultInteractionsOfType(int                               ftype,
         {
             pos = std::find_if(bondType[ftype].interactionTypes.begin(),
                                bondType[ftype].interactionTypes.end(),
-                               [&atomTypes, &nmatch_max](const auto& bondType) {
-                                   return (findNumberOfDihedralAtomMatches(bondType, atomTypes) > nmatch_max);
+                               [&atomTypes, &nmatch_max](const auto& elemBondType) {
+                                   return (findNumberOfDihedralAtomMatches(elemBondType, atomTypes)
+                                           > nmatch_max);
                                });
             if (pos != bondType[ftype].interactionTypes.end())
             {
@@ -1943,8 +1986,6 @@ void push_bond(Directive                         d,
         }
         for (int j = i + 1; (j < nral); j++)
         {
-            GMX_ASSERT(j < MAXATOMLIST + 1,
-                       "Values from nral=NRAL() will satisfy this, we assert to keep gcc 4 happy");
             if (aa[i] == aa[j])
             {
                 auto message = gmx::formatString(
@@ -2309,9 +2350,7 @@ void push_cmap(Directive                         d,
                char*                             line,
                WarningHandler*                   wi)
 {
-    const char* aaformat[MAXATOMLIST + 1] = {
-        "%d", "%d%d", "%d%d%d", "%d%d%d%d", "%d%d%d%d%d", "%d%d%d%d%d%d", "%d%d%d%d%d%d%d"
-    };
+    const char* aaformat[] = { "%d%d%d%d%d%d", "%d%d%d%d%d%d%d", "%d%d%d%d%d%d%d%d" };
 
     int  ftype, nral, nread, ncmap_params;
     int  cmap_type;
@@ -2322,7 +2361,7 @@ void push_cmap(Directive                         d,
     nral         = NRAL(ftype);
     ncmap_params = 0;
 
-    nread = sscanf(line, aaformat[nral - 1], &aa[0], &aa[1], &aa[2], &aa[3], &aa[4], &aa[5]);
+    nread = sscanf(line, aaformat[0], &aa[0], &aa[1], &aa[2], &aa[3], &aa[4], &aa[nral]);
 
     if (nread < nral)
     {
@@ -2333,6 +2372,7 @@ void push_cmap(Directive                         d,
     {
         ftype = ifunc_index(d, 1);
     }
+    GMX_RELEASE_ASSERT(aa[nral] == 1, "Invalid function type for cmap torsion: must be 1");
 
     /* Check for double atoms and atoms out of bounds */
     for (int i = 0; i < nral; i++)

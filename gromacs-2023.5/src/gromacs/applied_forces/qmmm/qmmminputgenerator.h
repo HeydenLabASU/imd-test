@@ -42,11 +42,17 @@
 #define GMX_APPLIED_FORCES_QMMMINPUTGENERATOR_H
 
 #include <set>
+#include <string>
 
+#include "gromacs/math/vectypes.h"
 #include "gromacs/pbcutil/pbc.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/basedefinitions.h"
+#include "gromacs/utility/real.h"
 
 #include "qmmmtypes.h"
+
+enum class PbcType : int;
 
 namespace gmx
 {
@@ -92,7 +98,7 @@ public:
 
 private:
     //! \brief Check if atom belongs to the global index of qmAtoms_
-    bool isQMAtom(index globalAtomIndex) const;
+    bool isQMAtom(Index globalAtomIndex) const;
 
     /*!\brief Calculates dimensions and center of the QM box.
      *  Also evaluates translation for the system in order to center QM atoms inside QM box
@@ -130,7 +136,7 @@ private:
     //! Translation that shifts qmCenter_ to the center of qmBox_
     RVec qmTrans_;
     //! Set containing indexes of all QM atoms
-    std::set<index> qmAtoms_;
+    std::set<Index> qmAtoms_;
     //! Atoms point charges
     ArrayRef<const real> q_;
     //! Atoms coordinates

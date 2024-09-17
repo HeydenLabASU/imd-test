@@ -44,9 +44,14 @@
 
 #include <cstring>
 
+#include <filesystem>
+
+#include "gromacs/math/vectypes.h"
 #include "gromacs/selection/indexutil.h"
 #include "gromacs/selection/position.h"
 #include "gromacs/selection/selectionenums.h"
+#include "gromacs/selection/selparam.h"
+#include "gromacs/selection/selvalue.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
@@ -57,6 +62,8 @@
 #include "mempool.h"
 #include "poscalc.h"
 #include "selmethod.h"
+
+struct gmx_ana_indexgrps_t;
 
 /*!
  * \param[in] sel Selection for which the string is requested
@@ -136,12 +143,12 @@ const char* _gmx_selelem_boolean_type_str(const gmx::SelectionTreeElement& sel)
 namespace gmx
 {
 
-SelectionTreeElement::SelectionTreeElement(e_selelem_t type, const SelectionLocation& location) :
+SelectionTreeElement::SelectionTreeElement(e_selelem_t elemType, const SelectionLocation& location) :
     location_(location)
 {
-    this->type  = type;
-    this->flags = (type != SEL_ROOT) ? SEL_ALLOCVAL : 0;
-    if (type == SEL_BOOLEAN)
+    this->type  = elemType;
+    this->flags = (elemType != SEL_ROOT) ? SEL_ALLOCVAL : 0;
+    if (elemType == SEL_BOOLEAN)
     {
         this->v.type = GROUP_VALUE;
         this->flags |= SEL_ALLOCDATA;
@@ -226,11 +233,6 @@ void SelectionTreeElement::freeExpressionData()
             u.expr.pc = nullptr;
         }
     }
-    if (type == SEL_ARITHMETIC)
-    {
-        sfree(u.arith.opstr);
-        u.arith.opstr = nullptr;
-    }
     if (type == SEL_SUBEXPR || type == SEL_ROOT || (type == SEL_CONST && v.type == GROUP_VALUE))
     {
         gmx_ana_index_deinit(&u.cgrp);
@@ -295,18 +297,18 @@ void SelectionTreeElement::fillNameIfMissing(const char* selectionText)
     {
         // Check whether the actual selection given was from an external group,
         // and if so, use the name of the external group.
-        SelectionTreeElementPointer child = this->child;
-        if (_gmx_selelem_is_default_kwpos(*child) && child->child
-            && child->child->type == SEL_SUBEXPRREF && child->child->child)
+        SelectionTreeElementPointer childElem = this->child;
+        if (_gmx_selelem_is_default_kwpos(*childElem) && childElem->child
+            && childElem->child->type == SEL_SUBEXPRREF && childElem->child->child)
         {
-            if (child->child->child->type == SEL_CONST && child->child->child->v.type == GROUP_VALUE)
+            if (childElem->child->child->type == SEL_CONST && childElem->child->child->v.type == GROUP_VALUE)
             {
-                setName(child->child->child->name());
+                setName(childElem->child->child->name());
                 return;
             }
             // If the group reference is still unresolved, leave the name empty
             // and fill it later.
-            if (child->child->child->type == SEL_GROUPREF)
+            if (childElem->child->child->type == SEL_GROUPREF)
             {
                 return;
             }
@@ -347,11 +349,11 @@ SelectionTopologyProperties SelectionTreeElement::requiredTopologyProperties() c
             props.merge(SelectionTopologyProperties::masses());
         }
     }
-    SelectionTreeElementPointer child = this->child;
-    while (child && !props.hasAll())
+    SelectionTreeElementPointer childElem = this->child;
+    while (childElem && !props.hasAll())
     {
-        props.merge(child->requiredTopologyProperties());
-        child = child->next;
+        props.merge(childElem->requiredTopologyProperties());
+        childElem = childElem->next;
     }
     return props;
 }
@@ -368,11 +370,11 @@ void SelectionTreeElement::checkUnsortedAtoms(bool bUnsortedAllowed, ExceptionIn
     // TODO: For some complicated selections, this may result in the same
     // index group reference being flagged as an error multiple times for the
     // same selection.
-    SelectionTreeElementPointer child = this->child;
-    while (child)
+    SelectionTreeElementPointer childElem = this->child;
+    while (childElem)
     {
-        child->checkUnsortedAtoms(bUnsortedAllowed && bUnsortedSupported, errors);
-        child = child->next;
+        childElem->checkUnsortedAtoms(bUnsortedAllowed && bUnsortedSupported, errors);
+        childElem = childElem->next;
     }
 
     // The logic here is simplified by the fact that only constant groups can
@@ -396,14 +398,14 @@ bool SelectionTreeElement::requiresIndexGroups() const
     {
         return true;
     }
-    SelectionTreeElementPointer child = this->child;
-    while (child)
+    SelectionTreeElementPointer childElem = this->child;
+    while (childElem)
     {
-        if (child->requiresIndexGroups())
+        if (childElem->requiresIndexGroups())
         {
             return true;
         }
-        child = child->next;
+        childElem = childElem->next;
     }
     return false;
 }

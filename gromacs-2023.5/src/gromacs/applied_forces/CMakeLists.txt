@@ -44,8 +44,7 @@ target_link_libraries(applied_forces PRIVATE
 
 # Public interface for modules, including dependencies and interfaces
 #target_include_directories(applied_forces PUBLIC
-target_include_directories(applied_forces INTERFACE
-                           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+#                           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 #target_link_libraries(applied_forces PUBLIC
 target_link_libraries(applied_forces INTERFACE
                       legacy_api
@@ -67,6 +66,7 @@ gmx_add_libgromacs_sources(
 add_subdirectory(awh)
 add_subdirectory(densityfitting)
 add_subdirectory(qmmm)
+add_subdirectory(colvars)
 
 if (BUILD_TESTING)
     add_subdirectory(tests)
