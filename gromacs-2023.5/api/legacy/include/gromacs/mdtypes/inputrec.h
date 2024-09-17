@@ -113,12 +113,25 @@ struct t_simtemp
 
 struct t_lambda
 {
+    //! Return the initial lambda
+    double initialLambda(const FreeEnergyPerturbationCouplingType couplingType) const
+    {
+        if (init_lambda_without_states >= 0)
+        {
+            return init_lambda_without_states;
+        }
+        else
+        {
+            return all_lambda[couplingType][init_fep_state];
+        }
+    }
+
     //! The frequency for calculating dhdl
     int nstdhdl = 0;
     //! Fractional value of lambda (usually will use init_fep_state, this will only be for slow growth, and for legacy free energy code. Only has a valid value if positive)
-    double init_lambda = 0;
+    double init_lambda_without_states = -1;
     //! The initial number of the state
-    int init_fep_state = 0;
+    int init_fep_state = -1;
     //! Change of lambda per time step (fraction of (0.1)
     double delta_lambda = 0;
     //! Print no, total or potential energies in dhdl
@@ -175,7 +188,7 @@ struct t_expanded
     LambdaMoveCalculation elmcmove = LambdaMoveCalculation::Default;
     //! The method we use to decide of we have equilibrated the weights
     LambdaWeightWillReachEquilibrium elmceq = LambdaWeightWillReachEquilibrium::Default;
-    //! The minumum number of samples at each lambda for deciding whether we have reached a minimum
+    //! The minimum number of samples at each lambda for deciding whether we have reached a minimum
     int equil_n_at_lam = 0;
     //! Wang-Landau delta at which we stop equilibrating weights
     real equil_wl_delta = 0;
@@ -187,7 +200,7 @@ struct t_expanded
     int equil_samples = 0;
     //! Random number seed for lambda mc switches
     int lmc_seed = 0;
-    //! Whether to use minumum variance weighting
+    //! Whether to use minimum variance weighting
     bool minvar = false;
     //! The number of samples needed before kicking into minvar routine
     int minvarmin = 0;
@@ -271,6 +284,26 @@ struct t_IMD
     int nat;
     //! The global indices of the interactive atoms
     int* ind;
+    //! The initial transmission rate of IMD data
+    int nstimd;
+    //! The IMD version to use (2 or 3)
+    int imdversion;
+
+    //! In the case of IMD_v3, these switches modify IMD SessionInfo
+    //! Whether to send time (dt, time, step) data
+    bool bSendTime;
+    //! Whether to send box data
+    bool bSendBox;
+    //! Whether to send coordinate data
+    bool bSendCoords;
+    //! Whether to wrap coordinates
+    bool bWrapCoords;
+    //! Whether to send velocities
+    bool bSendVelocities;
+    //! Whether to send forces
+    bool bSendForces;
+    //! Whether to send energies
+    bool bSendEnergies;
 };
 
 struct t_swapGroup
@@ -332,7 +365,7 @@ struct PressureCouplingOptions
 struct t_inputrec // NOLINT (clang-analyzer-optin.performance.Padding)
 {
     t_inputrec();
-    explicit t_inputrec(const t_inputrec&) = delete;
+    explicit t_inputrec(const t_inputrec&)   = delete;
     t_inputrec& operator=(const t_inputrec&) = delete;
     ~t_inputrec();
 
@@ -377,8 +410,13 @@ struct t_inputrec // NOLINT (clang-analyzer-optin.performance.Padding)
     bool useMts = false;
     //! The multiple time stepping levels
     std::vector<gmx::MtsLevel> mtsLevels;
+
+    //! The factor for repartitioning atom masses
+    real massRepartitionFactor = 1;
+
     //! Precision of x in compressed trajectory file
     real x_compression_precision = 0;
+
     //! Requested fourier_spacing, when nk? not set
     real fourier_spacing = 0;
     //! Number of k vectors in x dimension for fourier methods for long range electrost.
@@ -423,8 +461,10 @@ struct t_inputrec // NOLINT (clang-analyzer-optin.performance.Padding)
     rvec posres_comB = { 0, 0, 0 };
     //! Random seed for Andersen thermostat (obsolete)
     int andersen_seed = 0;
-    //! Per atom pair energy drift tolerance (kJ/mol/ps/atom) for list buffer
+    //! Per atom pair energy drift tolerance (kJ/mol/ps/atom) for the pairlist buffer
     real verletbuf_tol = 0;
+    //! The tolerance for the average LJ pressure deviation for the pairlist buffer
+    real verletBufferPressureTolerance = 0;
     //! Short range pairlist cut-off (nm)
     real rlist = 0;
     //! Radius for test particle insertion
@@ -737,5 +777,8 @@ bool haveFreeEnergyType(const t_inputrec& ir, int fepType);
  */
 bool fepLambdasChangeAtSameRate(
         const gmx::EnumerationArray<FreeEnergyPerturbationCouplingType, std::vector<double>>& allLambdas);
+
+//! Return whether the box is continuously deformed
+bool ir_haveBoxDeformation(const t_inputrec& ir);
 
 #endif /* GMX_MDTYPES_INPUTREC_H */
